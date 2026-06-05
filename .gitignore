@@ -1,0 +1,26 @@
+# Python Virtual Environment
+venv/
+__pycache__/
+*.pyc
+
+# Local environment variables
+.env
+.env.local
+
+# Large video files, datasets, and outputs
+vedio/
+videos/
+backend/outputs/
+backend/datasets/
+
+# YOLO model weights and archives
+*.pt
+*.zip
+*.tar.gz
+
+# Temporary Office files
+~$*
+
+# IDE configuration
+.vscode/
+.idea/
