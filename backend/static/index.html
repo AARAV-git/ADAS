@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RoadSense AI — Live ADAS Monitoring Station</title>
+    <meta name="description" content="Real-time Indian traffic ADAS dashboard with live annotated video stream, AI-powered risk detection, and traffic chaos analysis.">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Space+Grotesk:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Style Sheet -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Ambient Glow Backgrounds -->
+    <div class="glow-bg glow-1"></div>
+    <div class="glow-bg glow-2"></div>
+    <div class="scanlines"></div>
+
+    <div class="dashboard-shell">
+        <!-- ────────────────────────────── TOP TOOLBAR ────────────────────────────── -->
+        <header class="toolbar glass" id="toolbar">
+            <div class="toolbar-brand">
+                <div class="brand-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+                    </svg>
+                </div>
+                <div>
+                    <h1>RoadSense <span>AI</span></h1>
+                    <p class="toolbar-sub">ADAS Monitoring Station</p>
+                </div>
+            </div>
+
+            <div class="toolbar-controls">
+                <div class="control-select-group" id="video-select-group">
+                    <label for="video-select">Video Feed</label>
+                    <div class="select-wrapper">
+                        <select id="video-select">
+                            <option value="" disabled selected>Select video...</option>
+                        </select>
+                    </div>
+                </div>
+                <button id="stream-btn" class="btn btn-stream" disabled>
+                    <span class="btn-icon play-icon" id="btn-icon">▶</span>
+                    <span id="btn-label">Start Stream</span>
+                </button>
+                <div class="control-separator"></div>
+                <button id="camera-btn" class="btn btn-camera">
+                    <span class="btn-icon">📷</span>
+                    <span id="camera-btn-label">Use Camera</span>
+                </button>
+            </div>
+
+            <div class="toolbar-status">
+                <div class="connection-badge" id="connection-badge">
+                    <span class="status-dot offline" id="status-dot"></span>
+                    <span id="status-text">Offline</span>
+                </div>
+                <div class="fps-badge" id="fps-badge">
+                    <span class="fps-icon">◉</span>
+                    <span id="fps-val">0.0</span>
+                    <span class="fps-unit">FPS</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- ────────────────────────────── MAIN AREA ─────────────────────────────── -->
+        <div class="main-area">
+            <!-- ══════════ VIDEO VIEWPORT (Dominant) ══════════ -->
+            <div class="viewport-stage" id="viewport-stage">
+                <div class="video-container glass" id="video-container">
+                    <canvas id="stream-canvas" width="1280" height="720"></canvas>
+
+                    <!-- Placeholder shown before stream starts -->
+                    <div class="video-placeholder" id="placeholder-overlay">
+                        <div class="scan-beam"></div>
+                        <div class="placeholder-content">
+                            <div class="radar-animation">
+                                <div class="radar-ring r1"></div>
+                                <div class="radar-ring r2"></div>
+                                <div class="radar-ring r3"></div>
+                                <div class="radar-sweep"></div>
+                            </div>
+                            <h2>Live Detection Viewport</h2>
+                            <p>Select a video feed and click <strong>Start Stream</strong>, or click <strong>Use Camera</strong> to stream your live device feed.</p>
+                            
+                            <!-- Mobile vehicle testing guide -->
+                            <div class="mobile-testing-guide glass">
+                                <h3>🚗 Test Live in your Car or Bike</h3>
+                                <ol>
+                                    <li>Mount your smartphone on your vehicle dashboard.</li>
+                                    <li>Connect your phone and laptop/running server to the same WiFi network.</li>
+                                    <li>Open your phone's browser and go to: <br><strong class="mobile-link" id="mobile-url">http://[loading...]:8000</strong></li>
+                                    <li>Select <strong>Use Camera</strong> and allow permission to process your live feed!</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Floating HUD overlays on the video -->
+                    <div class="video-hud hidden" id="video-hud">
+                        <!-- Top-left: Live indicator + video name -->
+                        <div class="hud-top-left">
+                            <div class="live-indicator">
+                                <span class="live-dot"></span>
+                                <span>LIVE</span>
+                            </div>
+                            <span class="hud-video-name" id="hud-video-name"></span>
+                        </div>
+
+                        <!-- Top-right: Frame counter -->
+                        <div class="hud-top-right">
+                            <span class="hud-frame" id="hud-frame">Frame: 0</span>
+                            <span class="hud-objects" id="hud-objects">Objects: 0</span>
+                        </div>
+
+                        <!-- Bottom-left: Risk level -->
+                        <div class="hud-bottom-left">
+                            <div class="hud-risk-badge" id="hud-risk-badge">
+                                <span class="risk-label">RISK</span>
+                                <span class="risk-value" id="hud-risk-val">LOW</span>
+                            </div>
+                        </div>
+
+                        <!-- Bottom-right: Quick chaos -->
+                        <div class="hud-bottom-right">
+                            <div class="hud-chaos-bar">
+                                <span class="chaos-label">CHAOS</span>
+                                <div class="mini-bar">
+                                    <div class="mini-bar-fill" id="hud-chaos-fill"></div>
+                                </div>
+                                <span class="chaos-val" id="hud-chaos-val">0</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ══════════ SIDE PANELS ══════════ -->
+            <aside class="side-panels">
+                <!-- Proximity Radar -->
+                <div class="panel radar-panel glass" id="radar-panel">
+                    <div class="panel-title">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="panel-icon"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+                        <span>Proximity Radar</span>
+                    </div>
+                    <div class="radar-canvas-wrap">
+                        <canvas id="radar-canvas" width="300" height="300"></canvas>
+                    </div>
+                    <div class="radar-legend">
+                        <span>L: Left</span><span>F: Front</span><span>R: Right</span>
+                    </div>
+                </div>
+
+                <!-- Chaos Dial -->
+                <div class="panel chaos-panel glass" id="chaos-panel">
+                    <div class="panel-title">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="panel-icon"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                        <span>Traffic Chaos</span>
+                    </div>
+                    <div class="chaos-dial-wrap">
+                        <svg viewBox="0 0 100 100" class="chaos-svg">
+                            <circle cx="50" cy="50" r="40" class="bg-circle" />
+                            <circle cx="50" cy="50" r="40" class="fg-circle" id="chaos-circle" />
+                        </svg>
+                        <div class="chaos-center">
+                            <span id="chaos-score" class="score">0</span>
+                            <span id="chaos-level" class="level text-green">Calm</span>
+                        </div>
+                    </div>
+                    <div class="chaos-breakdown">
+                        <div class="cb-row"><span>Vehicles</span><div class="cb-bar"><div class="cb-fill" id="cb-vehicles"></div></div></div>
+                        <div class="cb-row"><span>Variance</span><div class="cb-bar"><div class="cb-fill" id="cb-variance"></div></div></div>
+                        <div class="cb-row"><span>Intrusion</span><div class="cb-bar"><div class="cb-fill" id="cb-intrusion"></div></div></div>
+                        <div class="cb-row"><span>Pedestrians</span><div class="cb-bar"><div class="cb-fill" id="cb-pedestrians"></div></div></div>
+                    </div>
+                </div>
+
+                <!-- Active Warnings -->
+                <div class="panel alerts-panel glass" id="alerts-panel">
+                    <div class="panel-title">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="panel-icon"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        <span>ADAS Warnings</span>
+                        <span class="alert-count-badge" id="alert-count-badge">0</span>
+                    </div>
+                    <div class="alerts-scroll" id="alerts-log">
+                        <div class="no-alerts">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon">
+                                <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+                            </svg>
+                            <p>No active hazards</p>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </div>
+
+        <!-- ────────────────────────── BOTTOM EXPLAINABILITY BAR ──────────────────── -->
+        <div class="explain-bar glass" id="explain-bar">
+            <div class="explain-bar-header">
+                <div class="explain-bar-title">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="panel-icon"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    <span>AI Explainability Engine</span>
+                </div>
+                <span class="badge" id="llm-badge">Groq + LLaMA 3 Ready</span>
+            </div>
+            <div class="explain-bar-body">
+                <div class="explain-placeholder" id="explain-placeholder">
+                    <p>Click <strong>"Explain"</strong> on any alert card to get AI-generated context and recommended driver action.</p>
+                </div>
+                <div class="explain-content hidden" id="explain-content">
+                    <div class="explain-meta">
+                        <span class="risk-pill" id="explain-risk-pill">HIGH</span>
+                        <span class="meta-item">Target: <strong id="explain-target">—</strong></span>
+                        <span class="meta-item">Type: <strong id="explain-type">—</strong></span>
+                    </div>
+                    <p class="explanation-text" id="explanation-text"></p>
+                    <div class="explanation-action">
+                        <strong>Recommended Action:</strong>
+                        <p id="explanation-action-text"></p>
+                    </div>
+                </div>
+                <div class="loader hidden" id="explain-loader">
+                    <div class="spinner"></div>
+                    <p>Querying Groq + LLaMA 3 for explainability report...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detection Classes Legend (floating) -->
+    <div class="floating-legend" id="floating-legend">
+        <div class="legend-item"><span class="dot vru"></span>VRU</div>
+        <div class="legend-item"><span class="dot ped"></span>Ped</div>
+        <div class="legend-item"><span class="dot rider"></span>Rider</div>
+        <div class="legend-item"><span class="dot auto"></span>Auto</div>
+        <div class="legend-item"><span class="dot moto"></span>Moto</div>
+        <div class="legend-item"><span class="dot car"></span>Car</div>
+    </div>
+
+    <!-- Script File -->
+    <script src="/static/app.js"></script>
+</body>
+</html>

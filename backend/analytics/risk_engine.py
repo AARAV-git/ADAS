@@ -1,383 +1,101 @@
-# """
-# risk_engine.py — Behavioral risk prediction for RoadSense AI
-
-# Computes per-object risk using heuristic rules based on:
-#   - Speed
-#   - Direction change (trajectory angle delta)
-#   - Proximity to ego vehicle (bottom-center of frame)
-#   - Lane offset / horizontal drift
-#   - Object type
-
-# Returns RiskEvent objects consumed by the explainability module.
-# """
-
-# import numpy as np
-# from dataclasses import dataclass, field
-# from typing import List, Optional
-
-# from trackers.deepsort_tracker import TrackedObject
-
-
-# # ─── Risk Levels ─────────────────────────────────────────────────────────────
-
-# class RiskLevel:
-#     LOW      = "LOW"
-#     MEDIUM   = "MEDIUM"
-#     HIGH     = "HIGH"
-#     CRITICAL = "CRITICAL"
-
-
-# # ─── Risk Types ──────────────────────────────────────────────────────────────
-
-# class RiskType:
-#     LANE_CUT         = "lane_cut"
-#     COLLISION        = "collision"
-#     PEDESTRIAN_CROSS = "pedestrian_crossing"
-#     TAILGATING       = "tailgating"
-#     BLIND_SPOT       = "blind_spot"
-#     SUDDEN_BRAKE     = "sudden_brake"
-#     GENERAL          = "general"
-
-
-# @dataclass
-# class RiskEvent:
-#     track_id: int
-#     label: str
-#     risk_type: str
-#     risk_level: str
-#     risk_score: float          # 0.0–1.0
-#     details: dict = field(default_factory=dict)
-
-#     def to_dict(self):
-#         return {
-#             "track_id":   self.track_id,
-#             "label":      self.label,
-#             "risk_type":  self.risk_type,
-#             "risk_level": self.risk_level,
-#             "risk_score": round(self.risk_score, 3),
-#             "details":    self.details,
-#         }
-
-
-# # ─── Tunable thresholds ──────────────────────────────────────────────────────
-
-# SPEED_HIGH        = 8.0    # px/frame — fast-moving object
-# SPEED_VERY_HIGH   = 14.0
-# PROX_CRITICAL     = 120    # px from ego center — very close
-# PROX_HIGH         = 220
-# PROX_MEDIUM       = 380
-# ANGLE_CHANGE_HIGH = 25     # degrees — sharp direction change
-# ANGLE_CHANGE_CRIT = 45
-# HORIZ_DRIFT_HIGH  = 4.0    # px/frame horizontal drift
-# HORIZ_DRIFT_CRIT  = 7.0
-
-
-# class RiskEngine:
-#     """
-#     Stateless (per-frame) risk assessor.
-#     For each tracked object, applies a set of rule-based checks
-#     and aggregates a composite risk score.
-#     """
-
-#     def __init__(self, frame_width: int = 1280, frame_height: int = 720):
-#         self.frame_width  = frame_width
-#         self.frame_height = frame_height
-#         # Ego vehicle assumed at bottom-center
-#         self.ego_center = (frame_width / 2, frame_height - 50)
-
-#     def assess(self, tracked_objects: List[TrackedObject]) -> List[RiskEvent]:
-#         """Return a RiskEvent for every object with risk score > 0.15."""
-#         events = []
-#         for obj in tracked_objects:
-#             event = self._assess_object(obj)
-#             if event and event.risk_score > 0.15:
-#                 events.append(event)
-#         # Sort by risk score descending
-#         events.sort(key=lambda e: e.risk_score, reverse=True)
-#         return events
-
-#     def _assess_object(self, obj: TrackedObject) -> Optional[RiskEvent]:
-#         scores = {}
-
-#         proximity  = self._proximity_score(obj)
-#         lane_cut   = self._lane_cut_score(obj)
-#         ped_cross  = self._pedestrian_crossing_score(obj)
-#         blind_spot = self._blind_spot_score(obj)
-#         tailgate   = self._tailgating_score(obj)
-
-#         scores["proximity"]  = proximity
-#         scores["lane_cut"]   = lane_cut
-#         scores["ped_cross"]  = ped_cross
-#         scores["blind_spot"] = blind_spot
-#         scores["tailgate"]   = tailgate
-
-#         # Composite score — weighted
-#         weights = {
-#             "proximity":  0.30,
-#             "lane_cut":   0.25,
-#             "ped_cross":  0.20,
-#             "blind_spot": 0.15,
-#             "tailgate":   0.10,
-#         }
-#         total = sum(scores[k] * weights[k] for k in weights)
-
-#         # Determine dominant risk type
-#         dominant = max(scores, key=scores.get)
-#         risk_type_map = {
-#             "proximity":  RiskType.COLLISION,
-#             "lane_cut":   RiskType.LANE_CUT,
-#             "ped_cross":  RiskType.PEDESTRIAN_CROSS,
-#             "blind_spot": RiskType.BLIND_SPOT,
-#             "tailgate":   RiskType.TAILGATING,
-#         }
-#         risk_type  = risk_type_map.get(dominant, RiskType.GENERAL)
-#         risk_level = self._score_to_level(total)
-
-#         details = {
-#             "speed":        round(obj.speed, 2),
-#             "direction":    round(obj.direction, 1),
-#             "proximity_px": round(self._distance_to_ego(obj), 1),
-#             "vx":           round(obj.velocity[0], 2),
-#             "vy":           round(obj.velocity[1], 2),
-#             "sub_scores":   {k: round(v, 3) for k, v in scores.items()},
-#         }
-
-#         return RiskEvent(
-#             track_id=obj.track_id,
-#             label=obj.label,
-#             risk_type=risk_type,
-#             risk_level=risk_level,
-#             risk_score=min(total, 1.0),
-#             details=details,
-#         )
-
-#     # ── Sub-scorers ──────────────────────────────────────────────────────────
-
-#     def _distance_to_ego(self, obj: TrackedObject) -> float:
-#         cx, cy = obj.center
-#         ex, ey = self.ego_center
-#         return float(np.sqrt((cx - ex)**2 + (cy - ey)**2))
-
-#     def _proximity_score(self, obj: TrackedObject) -> float:
-#         dist = self._distance_to_ego(obj)
-#         if dist < PROX_CRITICAL:
-#             return 1.0
-#         elif dist < PROX_HIGH:
-#             return 0.75
-#         elif dist < PROX_MEDIUM:
-#             return 0.40
-#         else:
-#             return max(0.0, 1.0 - dist / (self.frame_height * 1.5))
-
-#     def _lane_cut_score(self, obj: TrackedObject) -> float:
-#         """High horizontal velocity + direction change = lane cut."""
-#         vx = abs(obj.velocity[0])
-#         score = 0.0
-
-#         if vx > HORIZ_DRIFT_CRIT:
-#             score += 0.7
-#         elif vx > HORIZ_DRIFT_HIGH:
-#             score += 0.4
-
-#         angle_change = self._trajectory_angle_change(obj)
-#         if angle_change > ANGLE_CHANGE_CRIT:
-#             score += 0.4
-#         elif angle_change > ANGLE_CHANGE_HIGH:
-#             score += 0.2
-
-#         # Motorcycles / bicycles get a slight uplift (common lane-cutters in India)
-#         if obj.label in ("motorcycle", "bicycle"):
-#             score *= 1.2
-
-#         return min(score, 1.0)
-
-#     def _pedestrian_crossing_score(self, obj: TrackedObject) -> float:
-#         if obj.label != "pedestrian":
-#             return 0.0
-#         score = 0.0
-#         vx = abs(obj.velocity[0])
-#         if vx > 1.5:
-#             score += 0.4
-#         cy = obj.center[1]
-#         if cy > self.frame_height * 0.4:
-#             score += 0.3
-#         if self._distance_to_ego(obj) < PROX_MEDIUM:
-#             score += 0.3
-#         return min(score, 1.0)
-
-#     def _blind_spot_score(self, obj: TrackedObject) -> float:
-#         """Object in left/right edge of frame, approaching fast."""
-#         cx = obj.center[0]
-#         left_zone  = cx < self.frame_width * 0.20
-#         right_zone = cx > self.frame_width * 0.80
-#         if not (left_zone or right_zone):
-#             return 0.0
-#         score = 0.3
-#         if obj.speed > SPEED_HIGH:
-#             score += 0.4
-#         if obj.speed > SPEED_VERY_HIGH:
-#             score += 0.2
-#         return min(score, 1.0)
-
-#     def _tailgating_score(self, obj: TrackedObject) -> float:
-#         """Object directly behind (bottom-center) and close."""
-#         cx, cy = obj.center
-#         center_x_zone = abs(cx - self.ego_center[0]) < self.frame_width * 0.15
-#         bottom_zone   = cy > self.frame_height * 0.65
-#         if not (center_x_zone and bottom_zone):
-#             return 0.0
-#         dist = self._distance_to_ego(obj)
-#         if dist < PROX_CRITICAL:
-#             return 0.9
-#         elif dist < PROX_HIGH:
-#             return 0.55
-#         return 0.2
-
-#     def _trajectory_angle_change(self, obj: TrackedObject) -> float:
-#         """Compute total direction change across recent trajectory."""
-#         traj = obj.trajectory
-#         if len(traj) < 3:
-#             return 0.0
-#         angles = []
-#         for i in range(1, len(traj)):
-#             dx = traj[i][0] - traj[i-1][0]
-#             dy = traj[i][1] - traj[i-1][1]
-#             if abs(dx) + abs(dy) < 0.5:
-#                 continue
-#             angles.append(np.degrees(np.arctan2(dy, dx)))
-#         if len(angles) < 2:
-#             return 0.0
-#         changes = [abs(angles[i] - angles[i-1]) for i in range(1, len(angles))]
-#         changes = [c if c <= 180 else 360 - c for c in changes]
-#         return float(np.mean(changes))
-
-#     @staticmethod
-#     def _score_to_level(score: float) -> str:
-#         if score >= 0.75:
-#             return RiskLevel.CRITICAL
-#         elif score >= 0.50:
-#             return RiskLevel.HIGH
-#         elif score >= 0.30:
-#             return RiskLevel.MEDIUM
-#         else:
-#             return RiskLevel.LOW
-
-
-
 """
-risk_engine.py — Behavioral risk prediction for RoadSense AI
+analytics/risk_engine.py — Behavioral Risk Prediction Engine for RoadSense AI
 
-Computes per-object risk using heuristic rules based on:
-  - Speed
-  - Direction change (trajectory angle delta)
-  - Proximity to ego vehicle (bottom-center of frame)
-  - Lane offset / horizontal drift
-  - Object type
+Per-object risk scoring using heuristic rules:
+  - Proximity to ego vehicle
+  - Lane cut (horizontal drift + direction change)
+  - Pedestrian / VRU crossing
+  - Blind spot
+  - Tailgating
 
-Returns RiskEvent objects consumed by the explainability module.
+Returns RiskEvent list sorted by score descending.
 """
 
 import numpy as np
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional
+from typing import List, Optional
 from trackers.deepsort_tracker import TrackedObject
+from utils.geometry import trajectory_angle_change
+from config import RISK
 
 
-# ─── Risk Levels ────────────────────────────────────────────────────────────
-
+# ── Risk level constants ──────────────────────────────────────────────────────
 class RiskLevel:
-    LOW    = "LOW"
-    MEDIUM = "MEDIUM"
-    HIGH   = "HIGH"
+    LOW      = "LOW"
+    MEDIUM   = "MEDIUM"
+    HIGH     = "HIGH"
     CRITICAL = "CRITICAL"
 
-
-# ─── Risk Types ─────────────────────────────────────────────────────────────
 
 class RiskType:
     LANE_CUT         = "lane_cut"
     COLLISION        = "collision"
     PEDESTRIAN_CROSS = "pedestrian_crossing"
+    VRU_DETECTED     = "vru_detected"
     TAILGATING       = "tailgating"
     BLIND_SPOT       = "blind_spot"
-    SUDDEN_BRAKE     = "sudden_brake"
     GENERAL          = "general"
 
 
 @dataclass
 class RiskEvent:
-    track_id: int
-    label: str
-    risk_type: str
+    track_id:   int
+    label:      str
+    risk_type:  str
     risk_level: str
-    risk_score: float          # 0.0–1.0
-    details: dict = field(default_factory=dict)
+    risk_score: float
+    bbox:       List[float] = field(default_factory=list)
+    details:    dict        = field(default_factory=dict)
 
     def to_dict(self):
         return {
-            "track_id": self.track_id,
-            "label": self.label,
-            "risk_type": self.risk_type,
+            "track_id":   self.track_id,
+            "label":      self.label,
+            "risk_type":  self.risk_type,
             "risk_level": self.risk_level,
             "risk_score": round(self.risk_score, 3),
-            "details": self.details,
+            "details":    self.details,
         }
 
 
-# ─── Tunable thresholds ──────────────────────────────────────────────────────
-
-SPEED_HIGH         = 8.0    # px/frame — fast-moving object
-SPEED_VERY_HIGH    = 14.0
-PROX_CRITICAL      = 120    # px from ego center — very close
-PROX_HIGH          = 220
-PROX_MEDIUM        = 380
-ANGLE_CHANGE_HIGH  = 25     # degrees — sharp direction change
-ANGLE_CHANGE_CRIT  = 45
-HORIZ_DRIFT_HIGH   = 4.0    # px/frame horizontal drift
-HORIZ_DRIFT_CRIT   = 7.0
+# ── VRU multiplier ────────────────────────────────────────────────────────────
+VRU_WEIGHT = {
+    "vulnerable_road_user": 2.0,
+    "pedestrian":           1.2,
+    "rider":                1.0,
+    "auto_rickshaw":        0.9,
+    "motorcycle":           0.9,
+    "car":                  0.7,
+    "bus":                  0.6,
+    "truck":                0.6,
+    "bicycle":              1.0,
+}
 
 
 class RiskEngine:
-    """
-    Stateless (per-frame) risk assessor.
-    For each tracked object, applies a set of rule-based checks
-    and aggregates a composite risk score.
-    """
-
     def __init__(self, frame_width: int = 1280, frame_height: int = 720):
-        self.frame_width = frame_width
-        self.frame_height = frame_height
-        # Ego vehicle assumed at bottom-center
-        self.ego_center = (frame_width / 2, frame_height - 50)
+        self.fw = frame_width
+        self.fh = frame_height
+        self.ego = (frame_width / 2, frame_height - 50)
 
-    def assess(self, tracked_objects: List[TrackedObject]) -> List[RiskEvent]:
-        """Return a RiskEvent for every object with risk score > 0.15."""
+    def assess(self, tracked: List[TrackedObject]) -> List[RiskEvent]:
         events = []
-        for obj in tracked_objects:
+        for obj in tracked:
             event = self._assess_object(obj)
             if event and event.risk_score > 0.15:
                 events.append(event)
-        # Sort by risk score descending
         events.sort(key=lambda e: e.risk_score, reverse=True)
         return events
 
     def _assess_object(self, obj: TrackedObject) -> Optional[RiskEvent]:
-        scores = {}
-        details = {}
+        scores = {
+            "proximity":  self._proximity(obj),
+            "lane_cut":   self._lane_cut(obj),
+            "ped_cross":  self._ped_cross(obj),
+            "blind_spot": self._blind_spot(obj),
+            "tailgate":   self._tailgate(obj),
+        }
 
-        proximity   = self._proximity_score(obj)
-        lane_cut    = self._lane_cut_score(obj)
-        ped_cross   = self._pedestrian_crossing_score(obj)
-        blind_spot  = self._blind_spot_score(obj)
-        tailgate    = self._tailgating_score(obj)
-
-        scores["proximity"]   = proximity
-        scores["lane_cut"]    = lane_cut
-        scores["ped_cross"]   = ped_cross
-        scores["blind_spot"]  = blind_spot
-        scores["tailgate"]    = tailgate
-
-        # Composite score — weighted
         weights = {
             "proximity":  0.30,
             "lane_cut":   0.25,
@@ -385,154 +103,102 @@ class RiskEngine:
             "blind_spot": 0.15,
             "tailgate":   0.10,
         }
+
         total = sum(scores[k] * weights[k] for k in weights)
 
-        # Determine dominant risk type
-        dominant = max(scores, key=scores.get)
-        risk_type_map = {
+        # Apply VRU multiplier
+        multiplier = VRU_WEIGHT.get(obj.label, 1.0)
+        total = min(total * multiplier, 1.0)
+
+        dominant  = max(scores, key=scores.get)
+        risk_type = {
             "proximity":  RiskType.COLLISION,
             "lane_cut":   RiskType.LANE_CUT,
-            "ped_cross":  RiskType.PEDESTRIAN_CROSS,
+            "ped_cross":  RiskType.PEDESTRIAN_CROSS
+                          if obj.label != "vulnerable_road_user"
+                          else RiskType.VRU_DETECTED,
             "blind_spot": RiskType.BLIND_SPOT,
             "tailgate":   RiskType.TAILGATING,
-        }
-        risk_type = risk_type_map.get(dominant, RiskType.GENERAL)
+        }.get(dominant, RiskType.GENERAL)
 
-        # Risk level
-        risk_level = self._score_to_level(total)
-
-        details = {
-            "speed":      round(obj.speed, 2),
-            "direction":  round(obj.direction, 1),
-            "proximity_px": round(self._distance_to_ego(obj), 1),
-            "vx":         round(obj.velocity[0], 2),
-            "vy":         round(obj.velocity[1], 2),
-            "sub_scores": {k: round(v, 3) for k, v in scores.items()},
-        }
+        # Override for VRU
+        if obj.label == "vulnerable_road_user":
+            risk_type = RiskType.VRU_DETECTED
+            total = max(total, 0.65)   # VRU minimum HIGH risk
 
         return RiskEvent(
-            track_id=obj.track_id,
-            label=obj.label,
-            risk_type=risk_type,
-            risk_level=risk_level,
-            risk_score=min(total, 1.0),
-            details=details,
+            track_id   = obj.track_id,
+            label      = obj.label,
+            risk_type  = risk_type,
+            risk_level = self._level(total),
+            risk_score = total,
+            bbox       = obj.bbox,
+            details    = {
+                "speed":       round(obj.speed, 2),
+                "direction":   round(obj.direction, 1),
+                "proximity_px": round(self._dist_ego(obj), 1),
+                "vx":          round(obj.velocity[0], 2),
+                "vy":          round(obj.velocity[1], 2),
+                "sub_scores":  {k: round(v, 3) for k, v in scores.items()},
+            },
         )
 
-    # ── Sub-scorers ──────────────────────────────────────────────────────────
+    # ── Sub-scorers ───────────────────────────────────────────────────────────
 
-    def _distance_to_ego(self, obj: TrackedObject) -> float:
-        cx, cy = obj.center
-        ex, ey = self.ego_center
-        return float(np.sqrt((cx - ex)**2 + (cy - ey)**2))
+    def _dist_ego(self, obj):
+        return float(np.sqrt(
+            (obj.cx - self.ego[0])**2 + (obj.cy - self.ego[1])**2
+        ))
 
-    def _proximity_score(self, obj: TrackedObject) -> float:
-        dist = self._distance_to_ego(obj)
-        if dist < PROX_CRITICAL:
-            return 1.0
-        elif dist < PROX_HIGH:
-            return 0.75
-        elif dist < PROX_MEDIUM:
-            return 0.40
-        else:
-            return max(0.0, 1.0 - dist / (self.frame_height * 1.5))
+    def _proximity(self, obj):
+        d = self._dist_ego(obj)
+        if d < RISK["prox_critical"]: return 1.0
+        if d < RISK["prox_high"]:     return 0.75
+        if d < RISK["prox_medium"]:   return 0.40
+        return max(0.0, 1.0 - d / (self.fh * 1.5))
 
-    def _lane_cut_score(self, obj: TrackedObject) -> float:
-        """High horizontal velocity + direction change = lane cut."""
-        vx = abs(obj.velocity[0])
+    def _lane_cut(self, obj):
+        vx    = abs(obj.velocity[0])
         score = 0.0
-
-        if vx > HORIZ_DRIFT_CRIT:
-            score += 0.7
-        elif vx > HORIZ_DRIFT_HIGH:
-            score += 0.4
-
-        # Direction change over trajectory
-        angle_change = self._trajectory_angle_change(obj)
-        if angle_change > ANGLE_CHANGE_CRIT:
-            score += 0.4
-        elif angle_change > ANGLE_CHANGE_HIGH:
-            score += 0.2
-
-        # Motorcycles / autos get a slight uplift (common lane-cutters)
-        if obj.label in ("motorcycle", "auto_rickshaw"):
+        if vx > RISK["horiz_drift_crit"]: score += 0.7
+        elif vx > RISK["horiz_drift_high"]: score += 0.4
+        ac = trajectory_angle_change(obj.trajectory)
+        if ac > RISK["angle_change_crit"]: score += 0.4
+        elif ac > RISK["angle_change_high"]: score += 0.2
+        if obj.label in ("motorcycle", "auto_rickshaw", "rider"):
             score *= 1.2
-
         return min(score, 1.0)
 
-    def _pedestrian_crossing_score(self, obj: TrackedObject) -> float:
-        if obj.label != "pedestrian":
+    def _ped_cross(self, obj):
+        if obj.label not in ("pedestrian", "vulnerable_road_user"):
             return 0.0
         score = 0.0
-        # Moving horizontally toward the road
-        vx = abs(obj.velocity[0])
-        vy = abs(obj.velocity[1])
-        # Pedestrian moving laterally (crossing)
-        if vx > 1.5:
-            score += 0.4
-        # Pedestrian near lane area (center vertically)
-        cy = obj.center[1]
-        if cy > self.frame_height * 0.4:
-            score += 0.3
-        # Approaching ego
-        if self._distance_to_ego(obj) < PROX_MEDIUM:
-            score += 0.3
+        if abs(obj.velocity[0]) > 1.5:           score += 0.4
+        if obj.cy > self.fh * 0.4:               score += 0.3
+        if self._dist_ego(obj) < RISK["prox_medium"]: score += 0.3
         return min(score, 1.0)
 
-    def _blind_spot_score(self, obj: TrackedObject) -> float:
-        """Object in left/right edge of frame, approaching fast."""
-        cx = obj.center[0]
-        left_zone  = cx < self.frame_width * 0.20
-        right_zone = cx > self.frame_width * 0.80
-        if not (left_zone or right_zone):
-            return 0.0
+    def _blind_spot(self, obj):
+        in_left  = obj.cx < self.fw * 0.20
+        in_right = obj.cx > self.fw * 0.80
+        if not (in_left or in_right): return 0.0
         score = 0.3
-        if obj.speed > SPEED_HIGH:
-            score += 0.4
-        if obj.speed > SPEED_VERY_HIGH:
-            score += 0.2
+        if obj.speed > RISK["speed_high"]:      score += 0.4
+        if obj.speed > RISK["speed_very_high"]: score += 0.2
         return min(score, 1.0)
 
-    def _tailgating_score(self, obj: TrackedObject) -> float:
-        """Object directly behind (bottom-center) and close."""
-        cx, cy = obj.center
-        center_x_zone = abs(cx - self.ego_center[0]) < self.frame_width * 0.15
-        bottom_zone   = cy > self.frame_height * 0.65
-        if not (center_x_zone and bottom_zone):
-            return 0.0
-        dist = self._distance_to_ego(obj)
-        if dist < PROX_CRITICAL:
-            return 0.9
-        elif dist < PROX_HIGH:
-            return 0.55
+    def _tailgate(self, obj):
+        center_zone = abs(obj.cx - self.ego[0]) < self.fw * 0.15
+        bottom_zone = obj.cy > self.fh * 0.65
+        if not (center_zone and bottom_zone): return 0.0
+        d = self._dist_ego(obj)
+        if d < RISK["prox_critical"]: return 0.9
+        if d < RISK["prox_high"]:     return 0.55
         return 0.2
 
-    def _trajectory_angle_change(self, obj: TrackedObject) -> float:
-        """Compute total direction change across recent trajectory."""
-        traj = obj.trajectory
-        if len(traj) < 3:
-            return 0.0
-        angles = []
-        for i in range(1, len(traj)):
-            dx = traj[i][0] - traj[i-1][0]
-            dy = traj[i][1] - traj[i-1][1]
-            if abs(dx) + abs(dy) < 0.5:
-                continue
-            angles.append(np.degrees(np.arctan2(dy, dx)))
-        if len(angles) < 2:
-            return 0.0
-        changes = [abs(angles[i] - angles[i-1]) for i in range(1, len(angles))]
-        # Normalize angle diff to [0, 180]
-        changes = [c if c <= 180 else 360 - c for c in changes]
-        return float(np.mean(changes))
-
     @staticmethod
-    def _score_to_level(score: float) -> str:
-        if score >= 0.75:
-            return RiskLevel.CRITICAL
-        elif score >= 0.50:
-            return RiskLevel.HIGH
-        elif score >= 0.30:
-            return RiskLevel.MEDIUM
-        else:
-            return RiskLevel.LOW
+    def _level(score: float) -> str:
+        if score >= 0.75: return RiskLevel.CRITICAL
+        if score >= 0.50: return RiskLevel.HIGH
+        if score >= 0.30: return RiskLevel.MEDIUM
+        return RiskLevel.LOW

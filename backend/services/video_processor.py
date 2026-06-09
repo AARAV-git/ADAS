@@ -1,257 +1,87 @@
 """
-video_processor.py — Core video processing pipeline for RoadSense AI
+services/video_processor.py — Full RoadSense AI Pipeline Orchestrator
 
-Orchestrates:
-  Dashcam frame → YOLO detect → DeepSORT track → Behavior analysis
-  → Risk prediction → Chaos score → Explainable alerts → Annotated frame
-
-Exposes both a synchronous file-processor and an async frame generator
-for the FastAPI WebSocket streaming endpoint.
+Connects all modules in order:
+  Detection → Behavior Classification → Tracking → Risk → Chaos → Explainability
 """
 
 import cv2
-import time
-import os
-import asyncio
-from typing import AsyncGenerator, Optional, Generator
-
 import numpy as np
-
-from detectors.yolo_detector import Detector
-from trackers.deepsort_tracker import Tracker
-from analytics.behavior_engine import BehaviorEngine
+from typing import Optional
+from detectors.yolo_detector import TripleModelDetector
+from trackers.deepsort_tracker import DeepSORTTracker
+from analytics.behavior_engine import IndianBehaviorEngine
 from analytics.risk_engine import RiskEngine
 from analytics.chaos_score import ChaosScoreEngine
 from explainability.llm_alerts import ExplainabilityEngine
-from utils.drawing import (
-    draw_tracked_objects,
-    draw_hud,
-    draw_risk_badge,
-    resize_frame,
-    frame_to_jpeg,
-)
 
 
-# ─── Pipeline result per frame ───────────────────────────────────────────────
-
-class FrameResult:
-    """All analytics data produced for a single frame."""
-
-    def __init__(
-        self,
-        frame_id: int,
-        annotated_frame: np.ndarray,
-        tracked_objects: list,
-        behavior_events: list,
-        risk_events: list,
-        chaos,
-        alerts: list,
-        summary: dict,
-        fps: float,
-    ):
-        self.frame_id        = frame_id
-        self.annotated_frame = annotated_frame
-        self.tracked_objects = tracked_objects
-        self.behavior_events = behavior_events
-        self.risk_events     = risk_events
-        self.chaos           = chaos
-        self.alerts          = alerts
-        self.summary         = summary
-        self.fps             = fps
-
-    def to_dict(self) -> dict:
-        return {
-            "frame_id":       self.frame_id,
-            "fps":            round(self.fps, 1),
-            "object_count":   len(self.tracked_objects),
-            "risk_events":    [r.to_dict() for r in self.risk_events],
-            "behavior_events": [b.to_dict() for b in self.behavior_events],
-            "chaos":          self.chaos.to_dict(),
-            "alerts":         [a.to_dict() for a in self.alerts],
-            "summary":        self.summary,
-        }
-
-
-# ─── Pipeline ────────────────────────────────────────────────────────────────
-
-class VideoProcessor:
+class RoadSensePipeline:
     """
-    Full RoadSense AI inference pipeline.
-
-    Usage:
-        processor = VideoProcessor(use_llm=True, groq_api_key="...")
-        for result in processor.process_file("video.mp4"):
-            # result.annotated_frame  → numpy BGR frame
-            # result.to_dict()        → JSON-serialisable analytics
+    Full pipeline per frame:
+      frame
+        → TripleModelDetector  (3 YOLO models)
+        → IndianBehaviorEngine (merge/classify: rider, VRU, pedestrian, auto)
+        → DeepSORTTracker      (persistent IDs + trajectory + velocity)
+        → RiskEngine           (per-object risk score + type)
+        → ChaosScoreEngine     (0-100 chaos score)
+        → ExplainabilityEngine (human-readable ADAS alerts)
     """
 
-    def __init__(
-        self,
-        model_path: str = "yolov8n.pt",
-        conf_threshold: float = 0.40,
-        frame_skip: int = 2,
-        output_resolution: tuple = (1280, 720),
-        use_llm: bool = False,
-        groq_api_key: Optional[str] = None,
-    ):
-        self.frame_skip        = frame_skip
-        self.output_resolution = output_resolution
+    def __init__(self, frame_width: int = 1280, frame_height: int = 720):
+        self.fw = frame_width
+        self.fh = frame_height
 
-        fw, fh = output_resolution
+        print("\n[RoadSense AI] Initializing pipeline...")
+        self.detector    = TripleModelDetector()
+        self.behavior    = IndianBehaviorEngine(frame_width, frame_height)
+        self.tracker     = DeepSORTTracker()
+        self.risk        = RiskEngine(frame_width, frame_height)
+        self.chaos       = ChaosScoreEngine(frame_width, frame_height)
+        self.explainer   = ExplainabilityEngine()
+        print("[RoadSense AI] Pipeline ready\n")
 
-        # ── Component init ──────────────────────────────────────────────────
-        self.detector    = Detector(model_path=model_path, conf_threshold=conf_threshold)
-        self.tracker     = Tracker(max_age=30, n_init=3)
-        self.behavior    = BehaviorEngine(frame_width=fw, frame_height=fh)
-        self.risk_engine = RiskEngine(frame_width=fw, frame_height=fh)
-        self.chaos_engine = ChaosScoreEngine(frame_width=fw, frame_height=fh)
-        self.explainer   = ExplainabilityEngine(
-            use_llm=use_llm,
-            groq_api_key=groq_api_key,
-            frame_width=fw,
+    def process_frame(self, frame: np.ndarray) -> dict:
+        """
+        Run full pipeline on a single frame.
+        Returns dict with all results.
+        """
+        h, w = frame.shape[:2]
+
+        # Update frame dimensions if changed
+        if w != self.fw or h != self.fh:
+            self.fw = w; self.fh = h
+            self.behavior = IndianBehaviorEngine(w, h)
+            self.risk     = RiskEngine(w, h)
+            self.chaos    = ChaosScoreEngine(w, h)
+
+        # Step 1: Detection
+        raw = self.detector.detect(frame)
+
+        # Step 2: Behavior classification (merge/classify)
+        classified = self.behavior.process(
+            base_dets  = raw["base"],
+            rider_dets = raw["rider"],
+            auto_dets  = raw["auto"],
         )
 
-        self._fps_history = []
-        self._frame_counter = 0
+        # Step 3: Tracking
+        tracked = self.tracker.update(classified, frame)
 
-    # ── Public: file processing ──────────────────────────────────────────────
+        # Step 4: Risk assessment
+        risks = self.risk.assess(tracked)
 
-    def process_file(self, video_path: str) -> Generator[FrameResult, None, None]:
-        """
-        Generator: yield FrameResult for every processed frame in a video file.
-        Skips frames according to self.frame_skip.
-        """
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise FileNotFoundError(f"Cannot open video: {video_path}")
+        # Step 5: Chaos score
+        chaos = self.chaos.compute(tracked)
 
-        raw_frame_idx = 0
-        try:
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                raw_frame_idx += 1
-                if raw_frame_idx % self.frame_skip != 0:
-                    continue
-
-                result = self._process_frame(frame)
-                if result:
-                    yield result
-        finally:
-            cap.release()
-
-    # ── Public: async frame generator (WebSocket streaming) ─────────────────
-
-    async def stream_file(self, video_path: str) -> AsyncGenerator[bytes, None]:
-        """
-        Async generator yielding JPEG bytes for each annotated frame.
-        Suitable for use in a FastAPI WebSocket or SSE endpoint.
-        """
-        loop = asyncio.get_event_loop()
-        cap  = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise FileNotFoundError(f"Cannot open video: {video_path}")
-
-        raw_frame_idx = 0
-        try:
-            while True:
-                ret, frame = await loop.run_in_executor(None, cap.read)
-                if not ret:
-                    break
-                raw_frame_idx += 1
-                if raw_frame_idx % self.frame_skip != 0:
-                    continue
-
-                result = await loop.run_in_executor(None, self._process_frame, frame)
-                if result:
-                    yield frame_to_jpeg(result.annotated_frame)
-                    await asyncio.sleep(0)   # yield control to event loop
-        finally:
-            cap.release()
-
-    # ── Core frame processing ────────────────────────────────────────────────
-
-    def _process_frame(self, raw_frame: np.ndarray) -> Optional[FrameResult]:
-        t0 = time.perf_counter()
-        self._frame_counter += 1
-
-        # 1. Resize
-        frame = resize_frame(raw_frame, self.output_resolution)
-
-        # 2. Detect
-        detections = self.detector.detect(frame)
-
-        # 3. Track
-        tracked = self.tracker.update(detections, frame)
-        if not tracked:
-            # Still build empty result so UI keeps updating
-            empty_chaos = self.chaos_engine.compute([])
-            fps = self._calc_fps(t0)
-            annotated = draw_hud(frame, empty_chaos.score, empty_chaos.level, fps, 0)
-            return FrameResult(
-                frame_id=self._frame_counter,
-                annotated_frame=annotated,
-                tracked_objects=[],
-                behavior_events=[],
-                risk_events=[],
-                chaos=empty_chaos,
-                alerts=[],
-                summary=self.explainer.summarize([], empty_chaos),
-                fps=fps,
-            )
-
-        # 4. Behavior analysis
-        behavior_events = self.behavior.analyze(tracked)
-
-        # 5. Risk assessment
-        risk_events = self.risk_engine.assess(tracked)
-
-        # 6. Chaos score
-        chaos = self.chaos_engine.compute(tracked)
-
-        # 7. Explainable alerts
-        centers = {obj.track_id: tuple(obj.center) for obj in tracked}
-        alerts  = self.explainer.generate_alerts(risk_events, chaos, centers)
+        # Step 6: Explainable alerts
+        alerts  = self.explainer.generate(risks, chaos, w)
         summary = self.explainer.summarize(alerts, chaos)
 
-        # 8. Annotate frame
-        risk_map = {e.track_id: e.risk_level for e in risk_events}
-        annotated = draw_tracked_objects(frame, tracked, risk_map)
-
-        alert_texts = [a.message for a in alerts[:3]]
-        annotated = draw_hud(
-            annotated,
-            chaos_score=chaos.score,
-            chaos_level=chaos.level,
-            fps=self._calc_fps(t0),
-            object_count=len(tracked),
-            active_alerts=alert_texts,
-        )
-
-        # Top risk badge
-        highest = summary.get("highest_risk", "LOW")
-        if highest in ("HIGH", "CRITICAL"):
-            annotated = draw_risk_badge(annotated, highest, x=540, y=68)
-
-        fps = self._calc_fps(t0)
-
-        return FrameResult(
-            frame_id=self._frame_counter,
-            annotated_frame=annotated,
-            tracked_objects=tracked,
-            behavior_events=behavior_events,
-            risk_events=risk_events,
-            chaos=chaos,
-            alerts=alerts,
-            summary=summary,
-            fps=fps,
-        )
-
-    def _calc_fps(self, t0: float) -> float:
-        elapsed = time.perf_counter() - t0
-        self._fps_history.append(elapsed)
-        if len(self._fps_history) > 30:
-            self._fps_history.pop(0)
-        avg = sum(self._fps_history) / len(self._fps_history)
-        return 1.0 / avg if avg > 0 else 0.0
+        return {
+            "tracked":  tracked,
+            "risks":    risks,
+            "chaos":    chaos,
+            "alerts":   alerts,
+            "summary":  summary,
+        }

@@ -1,152 +1,110 @@
 """
-drawing.py — OpenCV annotation utilities for RoadSense AI
-Draws bounding boxes, trajectory tails, HUD overlay, chaos bar, and alert strip.
+utils/drawing.py — OpenCV drawing helpers for RoadSense AI
 """
 
 import cv2
 import numpy as np
-from typing import List, Optional
-
-FONT      = cv2.FONT_HERSHEY_SIMPLEX
-FONT_BOLD = cv2.FONT_HERSHEY_DUPLEX
-
-# Colour palette per label
-LABEL_COLORS = {
-    "pedestrian": (0, 255, 255),
-    "bicycle":    (255, 165, 0),
-    "car":        (0, 255, 0),
-    "motorcycle": (255, 0, 255),
-    "bus":        (0, 0, 255),
-    "truck":      (128, 0, 200),
-    "vehicle":    (200, 200, 200),
-}
-
-# Risk level → box border colour
-RISK_COLORS = {
-    "LOW":      (0, 200, 0),
-    "MEDIUM":   (0, 165, 255),
-    "HIGH":     (0, 80, 255),
-    "CRITICAL": (0, 0, 255),
-}
+from config import COLOURS, RISK_COLOURS, CHAOS_COLOURS
 
 
-def draw_tracked_objects(frame: np.ndarray, tracked_objects, risk_map: dict = None) -> np.ndarray:
-    """
-    Draw bounding boxes + trajectory tails for every tracked object.
-    risk_map: track_id → risk_level string
-    """
-    out = frame.copy()
-    risk_map = risk_map or {}
+def draw_tracked_object(frame, obj):
+    """Draw bounding box + label + trajectory tail for a tracked object."""
+    x1, y1, x2, y2 = [int(v) for v in obj.bbox]
+    color     = COLOURS.get(obj.label, (200, 200, 200))
+    thickness = 3 if obj.label in ("vulnerable_road_user", "auto_rickshaw", "rider") else 2
 
-    for obj in tracked_objects:
-        x1, y1, x2, y2 = [int(v) for v in obj.bbox]
-        label_color = LABEL_COLORS.get(obj.label, (200, 200, 200))
-        risk_level  = risk_map.get(obj.track_id, "LOW")
-        box_color   = RISK_COLORS.get(risk_level, label_color)
-        thickness   = 3 if risk_level in ("HIGH", "CRITICAL") else 2
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
 
-        cv2.rectangle(out, (x1, y1), (x2, y2), box_color, thickness)
+    # Label
+    SHORT = {
+        "vulnerable_road_user": "VRU",
+        "auto_rickshaw":        "AUTO",
+        "pedestrian":           "PED",
+        "motorcycle":           "MOTO",
+    }
+    tag = f"#{obj.track_id} {SHORT.get(obj.label, obj.label.upper())} {obj.conf:.2f}"
+    (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.48, 1)
+    cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 6, y1), color, -1)
+    cv2.putText(frame, tag, (x1 + 3, y1 - 4),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 0, 0), 1)
 
-        # Trajectory tail
-        pts = [(int(p[0]), int(p[1])) for p in obj.trajectory]
+    # Trajectory tail
+    if hasattr(obj, "trajectory") and len(obj.trajectory) > 1:
+        pts = [(int(p[0]), int(p[1])) for p in obj.trajectory[-15:]]
         for i in range(1, len(pts)):
-            alpha = i / max(len(pts), 1)
-            tail_color = (
-                int(label_color[0] * alpha),
-                int(label_color[1] * alpha),
-                int(label_color[2] * alpha),
-            )
-            cv2.line(out, pts[i-1], pts[i], tail_color, 1)
+            alpha = i / len(pts)
+            c = (int(color[0]*alpha), int(color[1]*alpha), int(color[2]*alpha))
+            cv2.line(frame, pts[i-1], pts[i], c, 1)
 
-        # Label tag
-        tag = f"#{obj.track_id} {obj.label} {obj.speed:.1f}px/f"
-        (tw, th), _ = cv2.getTextSize(tag, FONT, 0.45, 1)
-        cv2.rectangle(out, (x1, max(y1 - th - 8, 0)), (x1 + tw + 4, max(y1, th + 4)), (0, 0, 0), -1)
-        cv2.putText(out, tag, (x1 + 2, max(y1 - 4, th)), FONT, 0.45, box_color, 1, cv2.LINE_AA)
-
-    return out
+    # VRU warning ring
+    if obj.label == "vulnerable_road_user":
+        cx, cy = int(obj.cx), int(obj.cy)
+        r = int(max(obj.w, obj.h) // 2 + 12)
+        cv2.circle(frame, (cx, cy), r,     (0, 0, 255), 2)
+        cv2.circle(frame, (cx, cy), r + 6, (0, 0, 255), 1)
 
 
-def draw_hud(
-    frame: np.ndarray,
-    chaos_score: float,
-    chaos_level: str,
-    fps: float,
-    object_count: int,
-    active_alerts: Optional[List[str]] = None,
-) -> np.ndarray:
-    """Draw semi-transparent top HUD bar and bottom alert strip."""
+def draw_risk_overlay(frame, risk_events):
+    """Draw risk level badges next to risky objects."""
+    for event in risk_events[:3]:
+        color = RISK_COLOURS.get(event.risk_level, (200, 200, 200))
+        # Draw a small risk badge at top-right of bbox
+        if hasattr(event, "bbox") and event.bbox:
+            x2 = int(event.bbox[2])
+            y1 = int(event.bbox[1])
+            badge = f"!{event.risk_level[:3]}"
+            cv2.putText(frame, badge, (x2 - 40, y1 + 16),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+
+def draw_hud(frame, chaos, alerts, fps, frame_id):
+    """Draw full HUD overlay — top bar + alert panel + bottom legend."""
     h, w = frame.shape[:2]
-    out  = frame.copy()
 
-    # ── Top bar ──────────────────────────────────────────────────────────────
-    overlay = out.copy()
-    cv2.rectangle(overlay, (0, 0), (w, 60), (10, 10, 10), -1)
-    cv2.addWeighted(overlay, 0.60, out, 0.40, 0, out)
+    vru_active = any(a.label == "vulnerable_road_user"
+                     for a in alerts if hasattr(a, "label")) if alerts else False
 
-    chaos_color = _chaos_color(chaos_score)
+    # ── Top bar ───────────────────────────────────────────────────────────────
+    bar_col = (50, 0, 0) if vru_active else (15, 15, 15)
+    cv2.rectangle(frame, (0, 0), (w, 48), bar_col, -1)
 
-    # Chaos score label
-    cv2.putText(out, "CHAOS SCORE", (12, 20), FONT, 0.45, (180, 180, 180), 1, cv2.LINE_AA)
-    cv2.putText(out, f"{chaos_score:.0f}/100  {chaos_level.upper()}", (12, 48),
-                FONT_BOLD, 0.75, chaos_color, 1, cv2.LINE_AA)
+    if vru_active:
+        cv2.putText(frame, "!! VRU DETECTED — REDUCE SPEED !!",
+                    (10, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (0, 60, 255), 2)
 
-    # Chaos bar
-    bar_x, bar_y, bar_w, bar_h = 240, 18, 260, 22
-    cv2.rectangle(out, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (50, 50, 50), -1)
-    filled = int(bar_w * chaos_score / 100)
-    cv2.rectangle(out, (bar_x, bar_y), (bar_x + filled, bar_y + bar_h), chaos_color, -1)
-    cv2.rectangle(out, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (120, 120, 120), 1)
+    chaos_color = CHAOS_COLOURS.get(chaos.level, (200, 200, 200))
+    info = (f"Frame:{frame_id}  CHAOS:{chaos.score:.0f}/100 [{chaos.level}]  "
+            f"Objects:{chaos.object_count}  FPS:{fps:.1f}")
+    cv2.putText(frame, info, (10, 38),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.50, chaos_color, 1)
 
-    # FPS + object count (right side)
-    cv2.putText(out, f"FPS {fps:.1f}", (w - 160, 28), FONT, 0.50, (200, 200, 200), 1, cv2.LINE_AA)
-    cv2.putText(out, f"OBJ {object_count}", (w - 160, 52), FONT, 0.50, (200, 200, 200), 1, cv2.LINE_AA)
+    # ── Alert panel (left side) ───────────────────────────────────────────────
+    for i, alert in enumerate(alerts[:4]):
+        y = 60 + i * 52
+        color = RISK_COLOURS.get(alert.risk_level, (200, 200, 200))
+        cv2.putText(frame,
+            f"[{alert.risk_level}] {alert.label.upper()} #{alert.track_id}",
+            (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 2)
+        cv2.putText(frame, alert.message[:75],
+            (10, y + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (220, 220, 220), 1)
+        cv2.putText(frame, f"-> {alert.action[:75]}",
+            (10, y + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (150, 255, 150), 1)
 
-    # RoadSense AI watermark
-    cv2.putText(out, "RoadSense AI", (w // 2 - 70, 38), FONT_BOLD, 0.55, (80, 180, 255), 1, cv2.LINE_AA)
+    # ── Chaos bar (bottom right) ───────────────────────────────────────────────
+    bar_w = 200
+    bar_h = 14
+    bx    = w - bar_w - 20
+    by    = h - 50
+    fill  = int(bar_w * chaos.score / 100)
+    cv2.rectangle(frame, (bx, by), (bx + bar_w, by + bar_h), (40, 40, 40), -1)
+    cv2.rectangle(frame, (bx, by), (bx + fill,  by + bar_h), chaos_color, -1)
+    cv2.putText(frame, f"CHAOS {chaos.score:.0f}",
+                (bx, by - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, chaos_color, 1)
 
-    # ── Bottom alert strip ───────────────────────────────────────────────────
-    if active_alerts:
-        overlay2 = out.copy()
-        cv2.rectangle(overlay2, (0, h - 48), (w, h), (10, 10, 10), -1)
-        cv2.addWeighted(overlay2, 0.65, out, 0.35, 0, out)
+    # ── Bottom legend ─────────────────────────────────────────────────────────
+    cv2.rectangle(frame, (0, h - 26), (w, h), (15, 15, 15), -1)
+    cv2.putText(frame,
+        "RED=VRU  YELLOW=Ped  LT.GREEN=Rider  CYAN=Auto  MAGENTA=Moto  GREEN=Car",
+        (8, h - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (110, 110, 110), 1)
 
-        icon = "⚠ " if any(a for a in active_alerts) else ""
-        alert_text = "  |  ".join(active_alerts[:3])
-        display = (icon + alert_text)[:120]   # truncate long strings
-        cv2.putText(out, display, (12, h - 16),
-                    FONT, 0.46, (0, 220, 255), 1, cv2.LINE_AA)
-
-    return out
-
-
-def draw_risk_badge(frame: np.ndarray, risk_level: str, x: int = 520, y: int = 10) -> np.ndarray:
-    """Draw a coloured risk-level badge in the top-center of the frame."""
-    out = frame.copy()
-    color = RISK_COLORS.get(risk_level, (0, 200, 0))
-    badge_text = f" {risk_level} RISK "
-    (tw, th), _ = cv2.getTextSize(badge_text, FONT_BOLD, 0.65, 1)
-    cv2.rectangle(out, (x, y), (x + tw + 8, y + th + 12), color, -1)
-    cv2.putText(out, badge_text, (x + 4, y + th + 6), FONT_BOLD, 0.65, (0, 0, 0), 1, cv2.LINE_AA)
-    return out
-
-
-def resize_frame(frame: np.ndarray, target_size=(1280, 720)) -> np.ndarray:
-    return cv2.resize(frame, target_size, interpolation=cv2.INTER_LINEAR)
-
-
-def frame_to_jpeg(frame: np.ndarray, quality: int = 80) -> bytes:
-    """Encode frame as JPEG bytes for streaming."""
-    _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
-    return buf.tobytes()
-
-
-# ─── Helpers ─────────────────────────────────────────────────────────────────
-
-def _chaos_color(score: float):
-    if score <= 30:
-        return (0, 220, 0)    # green
-    elif score <= 60:
-        return (0, 165, 255)  # orange
-    else:
-        return (0, 0, 255)    # red
+    return frame
