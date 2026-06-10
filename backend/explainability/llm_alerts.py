@@ -163,10 +163,9 @@ class ExplainabilityEngine:
                 (event.bbox[0] + event.bbox[2]) / 2 if event.bbox else frame_width/2,
                 frame_width
             )
-            if self.use_llm and event.risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL):
-                alert = self._llm_alert(event, chaos, side)
-            else:
-                alert = self._rule_alert(event, chaos, side)
+            # Always use fast rule alert for real-time frame processing to prevent stream lag.
+            # Rich LLM analysis is fetched on-demand when clicking "Explain" in the UI.
+            alert = self._rule_alert(event, chaos, side)
             alerts.append(alert)
         return alerts
 

@@ -16,6 +16,9 @@ from analytics.chaos_score import ChaosScoreEngine
 from explainability.llm_alerts import ExplainabilityEngine
 
 
+shared_detector = None
+
+
 class RoadSensePipeline:
     """
     Full pipeline per frame:
@@ -29,11 +32,15 @@ class RoadSensePipeline:
     """
 
     def __init__(self, frame_width: int = 1280, frame_height: int = 720):
+        global shared_detector
         self.fw = frame_width
         self.fh = frame_height
 
         print("\n[RoadSense AI] Initializing pipeline...")
-        self.detector    = TripleModelDetector()
+        if shared_detector is None:
+            shared_detector = TripleModelDetector()
+        self.detector = shared_detector
+
         self.behavior    = IndianBehaviorEngine(frame_width, frame_height)
         self.tracker     = DeepSORTTracker()
         self.risk        = RiskEngine(frame_width, frame_height)
@@ -41,7 +48,7 @@ class RoadSensePipeline:
         self.explainer   = ExplainabilityEngine()
         print("[RoadSense AI] Pipeline ready\n")
 
-    def process_frame(self, frame: np.ndarray) -> dict:
+    def process_frame(self, frame: np.ndarray, skip_detection: bool = False) -> dict:
         """
         Run full pipeline on a single frame.
         Returns dict with all results.
@@ -55,18 +62,22 @@ class RoadSensePipeline:
             self.risk     = RiskEngine(w, h)
             self.chaos    = ChaosScoreEngine(w, h)
 
-        # Step 1: Detection
-        raw = self.detector.detect(frame)
+        if skip_detection:
+            # Skip detection and behavior engines, update tracker with empty detections list
+            tracked = self.tracker.update([], frame)
+        else:
+            # Step 1: Detection
+            raw = self.detector.detect(frame)
 
-        # Step 2: Behavior classification (merge/classify)
-        classified = self.behavior.process(
-            base_dets  = raw["base"],
-            rider_dets = raw["rider"],
-            auto_dets  = raw["auto"],
-        )
+            # Step 2: Behavior classification (merge/classify)
+            classified = self.behavior.process(
+                base_dets  = raw["base"],
+                rider_dets = raw["rider"],
+                auto_dets  = raw["auto"],
+            )
 
-        # Step 3: Tracking
-        tracked = self.tracker.update(classified, frame)
+            # Step 3: Tracking
+            tracked = self.tracker.update(classified, frame)
 
         # Step 4: Risk assessment
         risks = self.risk.assess(tracked)

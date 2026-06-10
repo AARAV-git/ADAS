@@ -94,6 +94,16 @@ window.addEventListener('DOMContentLoaded', () => {
 
     streamBtn.addEventListener('click', toggleStream);
     cameraBtn.addEventListener('click', toggleCamera);
+
+    // History event listeners
+    const historyBtn = document.getElementById('history-btn');
+    if (historyBtn) historyBtn.addEventListener('click', toggleHistoryDrawer);
+
+    const closeHistoryBtn = document.getElementById('close-history-btn');
+    if (closeHistoryBtn) closeHistoryBtn.addEventListener('click', closeHistoryDrawer);
+
+    const backToSessionsBtn = document.getElementById('back-to-sessions-btn');
+    if (backToSessionsBtn) backToSessionsBtn.addEventListener('click', showSessionsListView);
 });
 
 // ── Fetch network IP info for mobile testing ───────────────────────────────
@@ -530,12 +540,37 @@ async function requestLLMExplain(alert, chaos) {
 }
 
 // ── Camera Streaming Functions ───────────────────────────────────────────────
+let _awaitingResponse = false;   // backpressure: wait for server to reply
+
 function toggleCamera() {
     if (isCameraMode) {
         stopCamera();
     } else {
         startCamera();
     }
+}
+
+/**
+ * getUserMedia polyfill — works on HTTP for localhost, but on remote IPs
+ * the browser blocks it.  We detect that early and show a helpful message.
+ */
+function _getMediaStream(constraints) {
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        return navigator.mediaDevices.getUserMedia(constraints);
+    }
+    // Legacy fallback (older Chrome / Firefox)
+    const legacyGetUserMedia =
+        navigator.getUserMedia ||
+        navigator.webkitGetUserMedia ||
+        navigator.mozGetUserMedia;
+    if (legacyGetUserMedia) {
+        return new Promise((resolve, reject) => {
+            legacyGetUserMedia.call(navigator, constraints, resolve, reject);
+        });
+    }
+    return Promise.reject(new Error(
+        'Camera API not available. Use HTTPS or access via localhost/127.0.0.1.'
+    ));
 }
 
 async function startCamera() {
@@ -545,167 +580,666 @@ async function startCamera() {
     placeholderOverlay.classList.add('hidden');
     videoHud.classList.remove('hidden');
     hudVideoName.textContent = 'Device Camera';
-    
+
     // Stop regular stream if running
     if (socket && !isCameraMode) {
         stopStream();
     }
-    
+
     isCameraMode = true;
     cameraBtn.classList.add('streaming');
     cameraBtnLabel.textContent = 'Stop Camera';
-    
+
     // Disable video streaming buttons while camera runs
     streamBtn.disabled = true;
     videoSelect.disabled = true;
-    
+
     try {
+        // Lower resolution = faster capture + encode + transfer + YOLO inference
         const constraints = {
             video: {
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
-                facingMode: "environment" // Prefer rear-facing camera on mobile phones!
+                width:  { ideal: 640 },
+                height: { ideal: 480 },
+                facingMode: 'environment',   // rear camera on phones
+                frameRate:  { ideal: 15, max: 20 },
             },
-            audio: false
+            audio: false,
         };
-        
-        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-        
+
+        cameraStream = await _getMediaStream(constraints);
+
         localVideo = document.createElement('video');
         localVideo.srcObject = cameraStream;
         localVideo.autoplay = true;
         localVideo.playsInline = true;
-        
-        // Wait for video metadata to load
-        await new Promise((resolve) => {
-            localVideo.onloadedmetadata = () => {
-                resolve();
-            };
+        localVideo.muted = true;
+
+        // Wait for video metadata
+        await new Promise((resolve, reject) => {
+            localVideo.onloadedmetadata = resolve;
+            setTimeout(() => reject(new Error('Camera timed out')), 8000);
         });
-        
+
         localVideo.play();
-        
+
         // Connect to /ws/camera WebSocket
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${location.host}/ws/camera`;
-        
+
         socket = new WebSocket(wsUrl);
         socket.binaryType = 'arraybuffer';
-        
+
         socket.onopen = () => {
             statusText.textContent = 'Connected (Camera)';
             console.log('[WS] Camera Stream WebSocket opened.');
-            // Start sending frames
+            _awaitingResponse = false;
+            lastTelemetryTime = Date.now();
+            requestAnimationFrame(localRenderLoop);
             sendCameraFramesLoop();
         };
-        
+
         socket.onmessage = (event) => {
             if (typeof event.data === 'string') {
                 try {
                     currentTelemetry = JSON.parse(event.data);
+                    lastTelemetryTime = Date.now();
                     updateTelemetryUI(currentTelemetry);
                 } catch (e) {
                     console.warn('[WS] Bad JSON:', e);
                 }
-            } else {
-                const blob = new Blob([event.data], { type: 'image/jpeg' });
-                createImageBitmap(blob).then(bitmap => {
-                    streamCtx.clearRect(0, 0, streamCanvas.width, streamCanvas.height);
-                    streamCtx.drawImage(bitmap, 0, 0, streamCanvas.width, streamCanvas.height);
-                    bitmap.close();
-                }).catch(err => {
-                    console.warn('[Camera] Bitmap decode failed, fallback:', err);
-                    const url  = URL.createObjectURL(blob);
-                    const img  = new Image();
-                    img.onload = () => {
-                        streamCtx.clearRect(0, 0, streamCanvas.width, streamCanvas.height);
-                        streamCtx.drawImage(img, 0, 0, streamCanvas.width, streamCanvas.height);
-                        URL.revokeObjectURL(url);
-                    };
-                    img.src = url;
-                });
+                // ── Backpressure: now that we got the response, send the next frame
+                _awaitingResponse = false;
+                sendCameraFramesLoop();
             }
         };
-        
+
         socket.onclose = () => {
             console.log('[WS] Camera Stream WebSocket closed.');
             if (isCameraMode) {
                 stopCamera();
             }
         };
-        
+
         socket.onerror = (err) => {
             console.error('[WS] Camera Error:', err);
         };
-        
+
     } catch (err) {
-        console.error("Failed to access device camera:", err);
-        alert("Could not access device camera: " + err.message);
+        console.error('Failed to access device camera:', err);
+
+        let msg = err.message || String(err);
+        if (msg.includes('not available') || msg.includes('getUserMedia')) {
+            msg = 'Camera API is blocked. On phones, you must use HTTPS.\n\n'
+                + 'To test locally:\n'
+                + '• On the same PC: open http://127.0.0.1:8000\n'
+                + '• On a phone: use Chrome flags (chrome://flags → Insecure origins treated as secure → add your server URL)';
+        }
+        alert('Camera error: ' + msg);
         stopCamera();
     }
+}
+
+let lastTelemetryTime = 0;
+
+function localRenderLoop() {
+    if (!isCameraMode || !localVideo) {
+        return;
+    }
+
+    const vw = localVideo.videoWidth || 640;
+    const vh = localVideo.videoHeight || 480;
+    if (streamCanvas.width !== vw || streamCanvas.height !== vh) {
+        streamCanvas.width = vw;
+        streamCanvas.height = vh;
+    }
+
+    // Draw the local camera frame directly to canvas
+    streamCtx.drawImage(localVideo, 0, 0, streamCanvas.width, streamCanvas.height);
+
+    // Draw bounding boxes on top
+    if (currentTelemetry && currentTelemetry.tracked) {
+        const elapsedSec = (Date.now() - lastTelemetryTime) / 1000;
+        const elapsedFrames = elapsedSec * 30.0; // Assume 30 FPS playback rate
+        const clampedElapsed = Math.min(elapsedFrames, 15.0); // limit drift
+
+        const extrapolatedTracked = currentTelemetry.tracked.map(obj => {
+            const vx = (obj.velocity && obj.velocity[0]) || 0.0;
+            const vy = (obj.velocity && obj.velocity[1]) || 0.0;
+            return {
+                ...obj,
+                bbox: [
+                    obj.bbox[0] + vx * clampedElapsed,
+                    obj.bbox[1] + vy * clampedElapsed,
+                    obj.bbox[2] + vx * clampedElapsed,
+                    obj.bbox[3] + vy * clampedElapsed
+                ],
+                cx: obj.cx + vx * clampedElapsed,
+                cy: obj.cy + vy * clampedElapsed
+            };
+        });
+
+        drawBoundingBoxes(streamCtx, extrapolatedTracked);
+    }
+
+    requestAnimationFrame(localRenderLoop);
+}
+
+function drawBoundingBoxes(ctx, tracked) {
+    if (!tracked || tracked.length === 0) return;
+
+    tracked.forEach(obj => {
+        const frameW = obj.frame_w || 640;
+        const frameH = obj.frame_h || 480;
+        const scaleX = streamCanvas.width / frameW;
+        const scaleY = streamCanvas.height / frameH;
+
+        const x1 = obj.bbox[0] * scaleX;
+        const y1 = obj.bbox[1] * scaleY;
+        const x2 = obj.bbox[2] * scaleX;
+        const y2 = obj.bbox[3] * scaleY;
+        const bw = x2 - x1;
+        const bh = y2 - y1;
+
+        const color = CLASS_COLORS[obj.label] || '#ffffff';
+
+        // 1. Draw Bounding Box
+        ctx.strokeStyle = color;
+        ctx.lineWidth = (obj.label === 'vulnerable_road_user' || obj.label === 'auto_rickshaw') ? 4 : 2;
+        ctx.strokeRect(x1, y1, bw, bh);
+
+        // 2. Draw Label pill above the box
+        const shortLabels = {
+            "vulnerable_road_user": "VRU",
+            "auto_rickshaw": "AUTO",
+            "pedestrian": "PED",
+            "motorcycle": "MOTO",
+            "bicycle": "BIKE"
+        };
+        const shortLabel = shortLabels[obj.label] || obj.label.toUpperCase();
+        const confText = obj.conf ? ` ${(obj.conf).toFixed(2)}` : '';
+        const speedText = obj.speed ? ` ${Math.round(obj.speed)}px/f` : '';
+        const tag = `#${obj.track_id} ${shortLabel}${confText}${speedText}`;
+
+        ctx.font = 'bold 11px Space Grotesk';
+        const textWidth = ctx.measureText(tag).width;
+
+        ctx.fillStyle = color;
+        ctx.fillRect(x1 - 1, y1 - 16, textWidth + 8, 16);
+
+        ctx.fillStyle = '#000000';
+        ctx.fillText(tag, x1 + 3, y1 - 4);
+
+        // 3. Draw Trajectory tail (dots/lines)
+        if (obj.trajectory && obj.trajectory.length > 1) {
+            ctx.beginPath();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.5;
+            for (let i = 0; i < obj.trajectory.length; i++) {
+                const tx = obj.trajectory[i][0] * scaleX;
+                const ty = obj.trajectory[i][1] * scaleY;
+                if (i === 0) {
+                    ctx.moveTo(tx, ty);
+                } else {
+                    ctx.lineTo(tx, ty);
+                }
+            }
+            ctx.stroke();
+        }
+
+        // 4. VRU warning ring
+        if (obj.label === 'vulnerable_road_user') {
+            const cx = obj.cx * scaleX;
+            const cy = obj.cy * scaleY;
+            const r = Math.max(bw, bh) / 2 + 12;
+
+            ctx.strokeStyle = '#ff3c3c';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+            ctx.stroke();
+
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(cx, cy, r + 6, 0, 2 * Math.PI);
+            ctx.stroke();
+        }
+    });
 }
 
 function sendCameraFramesLoop() {
     if (!isCameraMode || !socket || socket.readyState !== WebSocket.OPEN || !localVideo) {
         return;
     }
-    
-    if (!sendingFrame && localVideo.readyState >= 2) {
-        sendingFrame = true;
-        
-        // Match size
-        const w = localVideo.videoWidth || 640;
-        const h = localVideo.videoHeight || 480;
-        
-        const targetW = w > 854 ? 854 : w;
-        const targetH = Math.round(targetW * (h / w));
-        
-        captureCanvas.width = targetW;
-        captureCanvas.height = targetH;
-        
-        captureCtx.drawImage(localVideo, 0, 0, targetW, targetH);
-        
-        captureCanvas.toBlob((blob) => {
-            if (blob && socket && socket.readyState === WebSocket.OPEN) {
-                socket.send(blob);
-                sendingFrame = false;
-                setTimeout(sendCameraFramesLoop, 40); // Target ~25 FPS loop
-            } else {
-                sendingFrame = false;
-                setTimeout(sendCameraFramesLoop, 100);
-            }
-        }, 'image/jpeg', 0.60); // 0.60 quality is highly compact and processes faster
-    } else {
-        setTimeout(sendCameraFramesLoop, 33);
+    // Don't send if we're still waiting for the server to respond (backpressure)
+    if (_awaitingResponse) {
+        return;
     }
+    if (localVideo.readyState < 2) {
+        // Video not ready yet, retry shortly
+        setTimeout(sendCameraFramesLoop, 50);
+        return;
+    }
+
+    const w = localVideo.videoWidth  || 640;
+    const h = localVideo.videoHeight || 480;
+
+    // Capture at native res (already capped at 640x480 by constraints)
+    captureCanvas.width  = w;
+    captureCanvas.height = h;
+    captureCtx.drawImage(localVideo, 0, 0, w, h);
+
+    _awaitingResponse = true;
+
+    captureCanvas.toBlob((blob) => {
+        if (blob && socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(blob);
+            // The next frame will be sent when we receive the server's response
+            // (see socket.onmessage above)  — this is the backpressure mechanism.
+        } else {
+            _awaitingResponse = false;
+            setTimeout(sendCameraFramesLoop, 100);
+        }
+    }, 'image/jpeg', 0.50);   // 50% quality = fast encode + small payload
 }
 
 function stopCamera() {
     isCameraMode = false;
-    
+    _awaitingResponse = false;
+
     if (cameraStream) {
         cameraStream.getTracks().forEach(track => track.stop());
         cameraStream = null;
     }
-    
+
     if (localVideo) {
         localVideo.pause();
         localVideo.srcObject = null;
         localVideo = null;
     }
-    
+
     if (socket) {
         socket.close();
         socket = null;
     }
-    
+
     // Reset camera button
     cameraBtn.classList.remove('streaming');
     cameraBtnLabel.textContent = 'Use Camera';
-    
+
     // Enable stream buttons again
     streamBtn.disabled = !videoSelect.value;
     videoSelect.disabled = false;
-    
+
     resetStreamUI();
 }
+
+
+// ── Video Upload ─────────────────────────────────────────────────────────────
+const uploadInput        = document.getElementById('upload-input');
+const uploadToast        = document.getElementById('upload-toast');
+const uploadToastMsg     = document.getElementById('upload-toast-msg');
+const uploadToastIcon    = document.getElementById('upload-toast-icon');
+const uploadProgressFill = document.getElementById('upload-progress-fill');
+
+if (uploadInput) {
+    uploadInput.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        uploadInput.value = '';
+
+        // Show toast
+        if (uploadToast) uploadToast.classList.remove('hidden');
+        if (uploadToastIcon) uploadToastIcon.textContent = '⬆';
+        if (uploadToastMsg)  uploadToastMsg.textContent  = `Uploading "${file.name}" (${(file.size / 1048576).toFixed(1)} MB)…`;
+        if (uploadProgressFill) { uploadProgressFill.style.width = '0%'; uploadProgressFill.style.background = 'var(--neon-cyan)'; }
+
+        let fakePct = 0;
+        const fakeTimer = setInterval(() => {
+            fakePct = Math.min(fakePct + Math.random() * 8, 85);
+            if (uploadProgressFill) uploadProgressFill.style.width = fakePct + '%';
+        }, 300);
+
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+            clearInterval(fakeTimer);
+
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({ detail: 'Upload failed' }));
+                throw new Error(err.detail || `HTTP ${resp.status}`);
+            }
+
+            const data = await resp.json();
+            if (uploadProgressFill) { uploadProgressFill.style.width = '100%'; uploadProgressFill.style.background = 'var(--neon-green)'; }
+            if (uploadToastIcon) uploadToastIcon.textContent = '✓';
+            if (uploadToastMsg)  uploadToastMsg.textContent  = data.message || 'Upload complete!';
+
+            await refreshVideoList();
+            setTimeout(() => { if (uploadToast) uploadToast.classList.add('hidden'); }, 3000);
+
+        } catch (err) {
+            clearInterval(fakeTimer);
+            if (uploadProgressFill) { uploadProgressFill.style.width = '100%'; uploadProgressFill.style.background = 'var(--neon-red)'; }
+            if (uploadToastIcon) uploadToastIcon.textContent = '✕';
+            if (uploadToastMsg)  uploadToastMsg.textContent  = `Upload failed: ${err.message}`;
+            setTimeout(() => { if (uploadToast) uploadToast.classList.add('hidden'); }, 5000);
+        }
+    });
+}
+
+async function refreshVideoList() {
+    try {
+        const resp   = await fetch('/api/videos');
+        const videos = await resp.json();
+        const current = videoSelect.value;
+        while (videoSelect.options.length > 1) videoSelect.remove(1);
+        videos.forEach(v => {
+            const opt = document.createElement('option');
+            opt.value = v; opt.textContent = v;
+            if (v === current) opt.selected = true;
+            videoSelect.appendChild(opt);
+        });
+        streamBtn.disabled = !videoSelect.value;
+    } catch (err) {
+        console.error('Failed to refresh video list:', err);
+    }
+}
+
+// ── Session History Drawer Logic ─────────────────────────────────────────────
+const historyDrawer = document.getElementById('history-drawer');
+const historySessionsContainer = document.getElementById('history-sessions-container');
+const historySessionsListView = document.getElementById('history-sessions-list-view');
+const historySessionDetailsView = document.getElementById('history-session-details-view');
+
+function toggleHistoryDrawer() {
+    if (historyDrawer) {
+        if (historyDrawer.classList.contains('open')) {
+            closeHistoryDrawer();
+        } else {
+            historyDrawer.classList.add('open');
+            loadHistoryData();
+        }
+    }
+}
+
+function closeHistoryDrawer() {
+    if (historyDrawer) {
+        historyDrawer.classList.remove('open');
+    }
+}
+
+function showSessionsListView() {
+    if (historySessionsListView) historySessionsListView.classList.remove('hidden');
+    if (historySessionDetailsView) historySessionDetailsView.classList.add('hidden');
+}
+
+async function loadHistoryData() {
+    showSessionsListView();
+    await Promise.all([
+        loadOverviewStats(),
+        loadSessionsList()
+    ]);
+}
+
+async function loadOverviewStats() {
+    try {
+        const resp = await fetch('/api/stats/overview');
+        if (!resp.ok) return;
+        const stats = await resp.json();
+
+        document.getElementById('history-total-sessions').textContent = stats.total_sessions || 0;
+        document.getElementById('history-avg-chaos').textContent = (stats.avg_chaos_score || 0).toFixed(1);
+        document.getElementById('history-total-alerts').textContent = stats.total_alerts || 0;
+        document.getElementById('history-top-class').textContent = stats.top_risk_level || 'LOW';
+
+        const topRiskEl = document.getElementById('history-top-class');
+        if (topRiskEl) {
+            topRiskEl.className = 'value ' + getRiskClass(stats.top_risk_level);
+        }
+    } catch (err) {
+        console.error('Failed to load overview stats:', err);
+    }
+}
+
+function getRiskClass(lvl) {
+    if (!lvl) return 'risk-low';
+    const l = lvl.toUpperCase();
+    if (l === 'CRITICAL') return 'text-red';
+    if (l === 'HIGH') return 'text-orange';
+    if (l === 'MEDIUM') return 'text-orange';
+    return 'text-green';
+}
+
+async function loadSessionsList() {
+    if (!historySessionsContainer) return;
+    historySessionsContainer.innerHTML = '<div class="no-history-msg">Loading records...</div>';
+
+    try {
+        const resp = await fetch('/api/sessions?limit=50');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const sessions = await resp.json();
+
+        if (sessions.length === 0) {
+            historySessionsContainer.innerHTML = '<div class="no-history-msg">No recorded runs yet. Stream a video to create a session record!</div>';
+            return;
+        }
+
+        historySessionsContainer.innerHTML = '';
+        sessions.forEach(sess => {
+            const row = document.createElement('div');
+            row.className = 'session-row';
+
+            const localDate = new Date(sess.started_at).toLocaleString();
+            const riskLvl = sess.peak_risk_level || 'LOW';
+
+            row.innerHTML = `
+                <div class="session-row-info">
+                    <div class="session-row-title">${sess.video_name}</div>
+                    <div class="session-row-meta">
+                        <span class="date">${localDate}</span>
+                        <span>Frames: ${sess.total_frames}</span>
+                    </div>
+                    <div class="session-row-badges">
+                        <span class="session-badge chaos">Avg Chaos: ${sess.avg_chaos_score}</span>
+                        <span class="session-badge risk-${riskLvl.toLowerCase()}">Peak Risk: ${riskLvl}</span>
+                    </div>
+                </div>
+                <div class="session-actions">
+                    <button class="row-delete-btn" title="Delete record" data-id="${sess.id}">🗑</button>
+                </div>
+            `;
+
+            // Row click to view detail
+            row.addEventListener('click', (e) => {
+                if (e.target.classList.contains('row-delete-btn')) {
+                    e.stopPropagation();
+                    deleteSessionRecord(sess.id, sess.video_name);
+                } else {
+                    viewSessionDetails(sess.id);
+                }
+            });
+
+            historySessionsContainer.appendChild(row);
+        });
+    } catch (err) {
+        historySessionsContainer.innerHTML = `<div class="no-history-msg">Failed to load sessions: ${err.message}</div>`;
+    }
+}
+
+async function deleteSessionRecord(id, name) {
+    if (!confirm(`Are you sure you want to delete session #${id} (${name}) and all its historical telemetry/alerts?`)) {
+        return;
+    }
+    try {
+        const resp = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        await loadHistoryData();
+    } catch (err) {
+        alert(`Failed to delete session: ${err.message}`);
+    }
+}
+
+async function viewSessionDetails(sessionId) {
+    if (historySessionsListView) historySessionsListView.classList.add('hidden');
+    if (historySessionDetailsView) historySessionDetailsView.classList.remove('hidden');
+
+    // Clear details screen first
+    document.getElementById('details-session-title').textContent = 'Loading Session #' + sessionId + '...';
+    document.getElementById('det-started-at').textContent = '—';
+    document.getElementById('det-total-frames').textContent = '—';
+    document.getElementById('det-avg-fps').textContent = '—';
+    document.getElementById('det-peak-risk').textContent = '—';
+    document.getElementById('det-avg-chaos').textContent = '—';
+    document.getElementById('det-peak-chaos').textContent = '—';
+    document.getElementById('det-total-detections').textContent = '—';
+
+    const alertsContainer = document.getElementById('details-alerts-container');
+    if (alertsContainer) alertsContainer.innerHTML = '<div class="no-history-msg">Loading alerts...</div>';
+
+    try {
+        // 1. Fetch Session Details
+        const sessResp = await fetch(`/api/sessions/${sessionId}`);
+        if (!sessResp.ok) throw new Error(`HTTP ${sessResp.status}`);
+        const sess = await sessResp.json();
+
+        document.getElementById('details-session-title').textContent = sess.video_name;
+        document.getElementById('det-started-at').textContent = new Date(sess.started_at).toLocaleString();
+        document.getElementById('det-total-frames').textContent = sess.total_frames;
+        document.getElementById('det-avg-fps').textContent = sess.avg_fps.toFixed(1) + ' FPS';
+
+        const peakRiskEl = document.getElementById('det-peak-risk');
+        peakRiskEl.textContent = sess.peak_risk_level;
+        peakRiskEl.className = 'session-badge risk-' + sess.peak_risk_level.toLowerCase();
+
+        document.getElementById('det-avg-chaos').textContent = sess.avg_chaos_score.toFixed(1);
+        document.getElementById('det-peak-chaos').textContent = sess.max_chaos_score.toFixed(1);
+
+        let totalDets = 0;
+        if (sess.detection_summary) {
+            totalDets = Object.values(sess.detection_summary).reduce((a, b) => a + b, 0);
+        }
+        document.getElementById('det-total-detections').textContent = totalDets;
+
+        // 2. Fetch Timeline & draw timeline chart
+        const teleResp = await fetch(`/api/sessions/${sessionId}/telemetry`);
+        if (teleResp.ok) {
+            const telemetry = await teleResp.json();
+            drawTimelineChart(telemetry);
+        }
+
+        // 3. Fetch Alerts
+        const alertsResp = await fetch(`/api/sessions/${sessionId}/alerts`);
+        if (alertsResp.ok && alertsContainer) {
+            const alerts = await alertsResp.json();
+            if (alerts.length === 0) {
+                alertsContainer.innerHTML = '<div class="no-history-msg">No alerts generated during this run.</div>';
+            } else {
+                alertsContainer.innerHTML = '';
+                alerts.forEach(alert => {
+                    const item = document.createElement('div');
+                    item.className = 'detail-alert-item ' + alert.risk_level.toLowerCase();
+
+                    const labelText = alert.label ? alert.label.replace('_', ' ').toUpperCase() : 'VEHICLE';
+
+                    item.innerHTML = `
+                        <div class="detail-alert-meta">
+                            <span>Frame ${alert.frame_id} : ${labelText} #${alert.track_id}</span>
+                            <span class="session-badge risk-${alert.risk_level.toLowerCase()}">${alert.risk_level}</span>
+                        </div>
+                        <div class="detail-alert-msg">${alert.message} (Risk: ${alert.risk_score})</div>
+                    `;
+                    alertsContainer.appendChild(item);
+                });
+            }
+        }
+
+    } catch (err) {
+        document.getElementById('details-session-title').textContent = 'Error Loading Details';
+        console.error('Error fetching session details:', err);
+    }
+}
+
+function drawTimelineChart(telemetry) {
+    const canvas = document.getElementById('chaos-timeline-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+
+    ctx.clearRect(0, 0, w, h);
+
+    if (telemetry.length === 0) {
+        ctx.fillStyle = '#6b7a8d';
+        ctx.font = '12px Space Grotesk';
+        ctx.fillText('No timeline data available', w/2 - 70, h/2);
+        return;
+    }
+
+    // Grid Lines (Moderate 40, Chaotic 70)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+    ctx.lineWidth = 1;
+    [0.3, 0.6, 0.9].forEach(p => {
+        ctx.beginPath();
+        ctx.moveTo(30, h * p);
+        ctx.lineTo(w - 10, h * p);
+        ctx.stroke();
+    });
+
+    // Label guidelines
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.font = '9px JetBrains Mono';
+    ctx.fillText('70', 10, h * 0.3 + 3);
+    ctx.fillText('40', 10, h * 0.6 + 3);
+
+    // Draw timeline line
+    const paddingLeft = 35;
+    const paddingRight = 15;
+    const chartW = w - paddingLeft - paddingRight;
+    const chartH = h - 30;
+    const maxVal = 100;
+
+    const count = telemetry.length;
+
+    ctx.beginPath();
+    telemetry.forEach((t, i) => {
+        const x = paddingLeft + (i / (count - 1)) * chartW;
+        const y = h - 20 - (t.chaos_score / maxVal) * chartH;
+
+        if (i === 0) {
+            ctx.moveTo(x, y);
+        } else {
+            ctx.lineTo(x, y);
+        }
+    });
+
+    ctx.strokeStyle = 'var(--neon-cyan)';
+    ctx.lineWidth = 2;
+    ctx.shadowColor = 'rgba(0, 240, 255, 0.5)';
+    ctx.shadowBlur = 8;
+    ctx.stroke();
+    ctx.shadowBlur = 0; // reset
+
+    // Gradient fill under the line
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, 'rgba(0, 240, 255, 0.15)');
+    grad.addColorStop(1, 'rgba(0, 240, 255, 0)');
+
+    ctx.beginPath();
+    ctx.moveTo(paddingLeft, h - 20);
+    telemetry.forEach((t, i) => {
+        const x = paddingLeft + (i / (count - 1)) * chartW;
+        const y = h - 20 - (t.chaos_score / maxVal) * chartH;
+        ctx.lineTo(x, y);
+    });
+    ctx.lineTo(paddingLeft + chartW, h - 20);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Draw labels at the start and end of x-axis
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.fillText('Start', paddingLeft, h - 5);
+    ctx.fillText('End', w - paddingRight - 20, h - 5);
+}
+

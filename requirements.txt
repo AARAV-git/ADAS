@@ -1,4 +1,4 @@
-# -- Core Computer Vision & AI --------------------------------------------------
+# -- Core Computer Vision & AI -------------------------------------------------
 ultralytics>=8.0.200
 opencv-python>=4.8.0
 numpy>=1.24.0
@@ -7,11 +7,15 @@ numpy>=1.24.0
 deep-sort-realtime>=1.3.2
 
 # -- FastAPI Backend ------------------------------------------------------------
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-python-multipart>=0.0.6
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
 websockets>=12.0
 aiofiles>=23.2.1
+
+# -- Database -------------------------------------------------------------------
+sqlalchemy>=2.0.0
+aiosqlite>=0.20.0
 
 # -- LLM Integration ------------------------------------------------------------
 groq>=0.4.1

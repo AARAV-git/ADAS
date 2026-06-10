@@ -97,6 +97,8 @@ class ChaosScoreEngine:
 
     @staticmethod
     def _level(score: float) -> str:
-        if score <= 30: return "Calm"
+        if score <= 20: return "Calm"
+        if score <= 40: return "Low"
         if score <= 60: return "Moderate"
-        return "Chaotic"
+        if score <= 80: return "High"
+        return "Critical"

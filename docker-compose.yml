@@ -1,0 +1,48 @@
+version: "3.9"
+
+services:
+  roadsense:
+    build: .
+    image: roadsense-ai:latest
+    container_name: roadsense-ai
+
+    # ── GPU access (remove 'deploy' block for CPU-only) ───────────────────
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    ports:
+      - "${PORT:-8000}:8000"
+
+    volumes:
+      # Persistent video storage — put your .mp4 files here
+      - ./data/videos:/data/videos
+      # Persistent SQLite database
+      - ./data/db:/data
+      # Processed output videos
+      - ./data/outputs:/data/outputs
+
+    environment:
+      - VIDEOS_DIR=/data/videos
+      - OUTPUTS_DIR=/data/outputs
+      - DATABASE_URL=sqlite+aiosqlite:////data/roadsense.db
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - HOST=0.0.0.0
+      - PORT=8000
+
+    env_file:
+      - .env
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/stats/overview')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s

@@ -24,3 +24,9 @@ backend/datasets/
 # IDE configuration
 .vscode/
 .idea/
+
+# SQLite Databases
+*.db
+*.db-wal
+*.db-shm
+

@@ -59,9 +59,7 @@ ADAS Adoption/
 └── requirements.txt             # Python Dependencies
 ```
 
----
-
-## ⚡ Quick Start
+## ⚡ Quick Start (Local Development)
 
 ### 1. Install Dependencies
 Navigate to the `backend` folder and run the installer script:
@@ -71,17 +69,69 @@ python install.py
 ```
 
 ### 2. Configure Environment Variables
-Create a `.env` file in the `backend/` directory and add your Groq API Key:
+Create a `.env` file in the root directory (and/or in `backend/`) and add your variables (see `.env.example`):
 ```env
 GROQ_API_KEY=your_groq_api_key_here
+DATABASE_URL=sqlite+aiosqlite:///./roadsense.db
 ```
 
 ### 3. Run the Backend Server
 Start the Uvicorn development server:
+- **Windows:** Run `backend/start_server.bat` OR execute:
+  ```bash
+  cd backend
+  python -m uvicorn main:app --host 0.0.0.0 --port 8000
+  ```
+- **Linux/macOS:** Run `backend/start_server.sh` OR execute:
+  ```bash
+  cd backend
+  chmod +x start_server.sh
+  ./start_server.sh
+  ```
+
+---
+
+## 🐳 Docker Deployment (Hackathon Ready)
+
+RoadSense AI is fully containerized and ready for quick deployment. It includes optional Nvidia GPU pass-through support.
+
+### Prerequisites
+1. Install [Docker](https://www.docker.com/) and [Docker Compose](https://docs.docker.com/compose/).
+2. (Optional for GPU acceleration) Install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+
+### 1. Build and Start the Stack
+From the project root directory, run:
 ```bash
-python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+docker compose up --build -d
 ```
-Once started:
-* The interactive API docs will be available at `http://127.0.0.1:8000/docs`
-* You can check the health check endpoint at `http://127.0.0.1:8000/`
-* You can stream processed output in real-time in your browser at `http://127.0.0.1:8000/api/stream/video_01.mp4`
+This command:
+* Compiles the multi-stage, production-grade Docker image.
+* Starts the FastAPI backend with Uvicorn.
+* Mounts local volumes `./data/videos` and `./data/db` for persistent video uploads and database sessions.
+
+### 2. GPU vs CPU Configuration
+By default, `docker-compose.yml` attempts to allocate 1 Nvidia GPU. 
+* If you are running on a machine without a dedicated GPU, simply comment out or remove the `deploy:` block from the `docker-compose.yml` file.
+* The backend will automatically fall back to CPU mode (reducing image resolution to `320` for speed).
+
+---
+
+## 📊 Database & Historical Session Analytics
+
+The system features automatic SQLite/PostgreSQL persistent database integration. 
+
+### Database Architecture
+* Every video processed or streamed generates a unique `VideoSession` in the database.
+* Frame-by-frame chaos scores, vehicle densities, and warning telemetry are sampled and saved to the database.
+* Historical records can be explored directly in the web UI.
+
+### Using the Session History Panel
+1. Open the dashboard in your browser (`http://localhost:8000`).
+2. Click the **📊 History** button in the top-right toolbar.
+3. A slide-over panel will appear showing global overview statistics (Total Sessions, Average Chaos, Total Alerts).
+4. Click any listed session to view:
+   * A detailed metadata summary.
+   * An interactive, canvas-rendered **Traffic Chaos Timeline** chart.
+   * A complete list of all **Triggered ADAS Alerts** during that run.
+5. Delete any session by clicking the trash can icon (🗑).
+

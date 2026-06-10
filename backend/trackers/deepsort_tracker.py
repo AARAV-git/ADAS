@@ -50,11 +50,14 @@ class DeepSORTTracker:
     def __init__(self):
         print("  [Tracker] Initializing DeepSORT")
         embedder = None if BYPASS_EMBEDDER else "mobilenet"
+        # When embedder is bypassed (GPU mode), use high cosine distance (dummy embeddings
+        # have no meaningful similarity). When real embedder is used, keep it tight.
+        self._cosine_dist = 0.9 if BYPASS_EMBEDDER else 0.3
         self.tracker = DeepSort(
             max_age             = DEEPSORT_MAX_AGE,
             n_init              = DEEPSORT_N_INIT,
             nms_max_overlap     = 1.0,
-            max_cosine_distance = 0.3,
+            max_cosine_distance = self._cosine_dist,
             nn_budget           = None,
             embedder            = embedder,
         )
@@ -72,24 +75,42 @@ class DeepSORTTracker:
 
         if not dets:
             if BYPASS_EMBEDDER:
-                self.tracker.update_tracks([], embeds=[])
+                tracks = self.tracker.update_tracks([], embeds=[])
             else:
-                self.tracker.update_tracks([], frame=frame)
-            return []
-
-        # Format: ([x,y,w,h], conf, label)
-        raw = []
-        for d in dets:
-            bw = d.bbox[2] - d.bbox[0]
-            bh = d.bbox[3] - d.bbox[1]
-            raw.append(([d.bbox[0], d.bbox[1], bw, bh], d.conf, d.label))
-
-        if BYPASS_EMBEDDER:
-            embeds = np.zeros((len(raw), 512), dtype=np.float32)
-            embeds[:, 0] = 1.0  # Safe unit L2 norm to prevent division-by-zero NaN crashes in deep_sort_realtime
-            tracks = self.tracker.update_tracks(raw, embeds=embeds)
+                tracks = self.tracker.update_tracks([], frame=frame)
         else:
-            tracks = self.tracker.update_tracks(raw, frame=frame)
+            # Format: ([x,y,w,h], conf, label)
+            raw = []
+            for d in dets:
+                bw = d.bbox[2] - d.bbox[0]
+                bh = d.bbox[3] - d.bbox[1]
+                raw.append(([d.bbox[0], d.bbox[1], bw, bh], d.conf, d.label))
+
+            if BYPASS_EMBEDDER:
+                embeds = np.zeros((len(raw), 512), dtype=np.float32)
+                embeds[:, 0] = 1.0  # Safe unit L2 norm to prevent division-by-zero NaN crashes in deep_sort_realtime
+                try:
+                    tracks = self.tracker.update_tracks(raw, embeds=embeds)
+                except (ValueError, FloatingPointError) as exc:
+                    # "matrix contains invalid numeric entries" — reset and skip
+                    print(f"  [Tracker] DeepSORT NaN crash, resetting: {exc}")
+                    self.tracker = DeepSort(
+                        max_age             = DEEPSORT_MAX_AGE,
+                        n_init              = DEEPSORT_N_INIT,
+                        nms_max_overlap     = 1.0,
+                        max_cosine_distance = self._cosine_dist,
+                        nn_budget           = None,
+                        embedder            = None,
+                    )
+                    return []
+            else:
+                tracks = self.tracker.update_tracks(raw, frame=frame)
+        # Manually promote tentative tracks (state = 1) to confirmed (state = 2) so they survive skipped frames.
+        # Since we run YOLO inference every 4 frames on CPU, tentative tracks would otherwise age out immediately.
+        for t in tracks:
+            if t.state == 1:
+                t.state = 2
+
         result = []
 
         for track in tracks:
