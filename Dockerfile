@@ -39,7 +39,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/stats/overview')" || exit 1
 
 # ── Entrypoint ─────────────────────────────────────────────────────────────
-CMD ["python3", "-m", "uvicorn", "main:app", \
-     "--host", "0.0.0.0", "--port", "8000", \
-     "--workers", "1", \
-     "--proxy-headers", "--forwarded-allow-ips=*"]
+CMD ["sh", "-c", "python3 -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --proxy-headers --forwarded-allow-ips=*"]
