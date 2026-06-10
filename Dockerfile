@@ -2,21 +2,15 @@
 # Multi-stage: deps → runtime. GPU (CUDA) is optional via runtime flag.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Use a CUDA-capable base for GPU inference.
-# For CPU-only deployment replace with: python:3.11-slim
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+FROM python:3.11-slim
 
 # ── System packages ────────────────────────────────────────────────────────
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3.11 python3.11-dev python3-pip \
         libglib2.0-0 libgl1 libsm6 libxext6 libxrender-dev \
         ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Make python3.11 the default
-RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 && \
-    ln -sf /usr/bin/python3.11 /usr/bin/python
 
 # ── Python dependencies ────────────────────────────────────────────────────
 WORKDIR /app
