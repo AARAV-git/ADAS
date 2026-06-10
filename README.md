@@ -91,7 +91,7 @@ Start the Uvicorn development server:
 
 ---
 
-## 🐳 Docker Deployment (Hackathon Ready)
+## 🐳 Docker Deployment 
 
 RoadSense AI is fully containerized and ready for quick deployment. It includes optional Nvidia GPU pass-through support.
 
