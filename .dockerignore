@@ -59,6 +59,7 @@ backend/outputs/
 *.md
 *.docx
 *.txt
+!requirements.txt
 overview.docx
 backend_str.py
 rename_vedio.py
