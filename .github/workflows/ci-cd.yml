@@ -260,10 +260,6 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Dependencies
-        run: |
-          pip install python-dotenv torch --index-url https://download.pytorch.org/whl/cpu
-
       - name: Check Configuration Drift
         run: |
           echo "📊 Monitoring configuration drift..."
