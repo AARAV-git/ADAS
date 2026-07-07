@@ -441,10 +441,8 @@ export function LiveCameraStream({ onTelemetry }: LiveCameraProps) {
       setActive(true);
       setFacing(facingMode);
 
-      // Dynamic WebSocket URL — auto-resolves to LAN IP for mobile
-      const wsUrl = window.location.hostname === "localhost"
-        ? `ws://localhost:8000/ws/camera`
-        : `ws://${window.location.hostname}:8000/ws/camera`;
+      // Dynamic WebSocket URL — auto-resolves to LAN IP/production backend
+      const wsUrl = API.wsCamera();
 
       const ws = new WebSocket(wsUrl);
       ws.binaryType = "arraybuffer";
