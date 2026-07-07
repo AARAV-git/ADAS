@@ -22,7 +22,10 @@ function resolveBaseUrl(): string {
 function resolveWsUrl(): string {
   if (typeof window === "undefined") return "ws://localhost:8000";
   const base = resolveBaseUrl();
-  return base.replace(/^http/, "ws");
+  // Always use wss:// when page is served over https:// to avoid
+  // "mixed content" browser errors on Vercel/production deployments
+  const wsProto = window.location.protocol === "https:" ? "wss" : "ws";
+  return base.replace(/^https?/, wsProto);
 }
 
 const BASE_URL = resolveBaseUrl();
