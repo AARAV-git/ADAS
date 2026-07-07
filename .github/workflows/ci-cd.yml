@@ -354,6 +354,9 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Set Lowercase Repo Name
+        run: echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -365,15 +368,15 @@ jobs:
           push: false
           load: true
           tags: |
-            ghcr.io/${{ github.repository }}/roadsense-backend:${{ github.sha }}
-            ghcr.io/${{ github.repository }}/roadsense-backend:latest
+            ghcr.io/${{ env.REPO_LC }}/roadsense-backend:${{ github.sha }}
+            ghcr.io/${{ env.REPO_LC }}/roadsense-backend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Verify Image
         run: |
           echo "🐳 Docker image built successfully"
-          docker images ghcr.io/${{ github.repository }}/roadsense-backend
+          docker images ghcr.io/${{ env.REPO_LC }}/roadsense-backend
           echo ""
           echo "✅ Image ready for publishing"
 
@@ -388,6 +391,9 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Set Lowercase Repo Name
+        run: echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -406,8 +412,8 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}/roadsense-backend:${{ github.sha }}
-            ghcr.io/${{ github.repository }}/roadsense-backend:latest
+            ghcr.io/${{ env.REPO_LC }}/roadsense-backend:${{ github.sha }}
+            ghcr.io/${{ env.REPO_LC }}/roadsense-backend:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -415,8 +421,8 @@ jobs:
         run: |
           echo "═══════════════════════════════════════════════════════"
           echo "  📦 Image published to GHCR"
-          echo "  🏷️  ghcr.io/${{ github.repository }}/roadsense-backend:${{ github.sha }}"
-          echo "  🏷️  ghcr.io/${{ github.repository }}/roadsense-backend:latest"
+          echo "  🏷️  ghcr.io/${{ env.REPO_LC }}/roadsense-backend:${{ github.sha }}"
+          echo "  🏷️  ghcr.io/${{ env.REPO_LC }}/roadsense-backend:latest"
           echo "═══════════════════════════════════════════════════════"
 
   # ═══════════════════════════════════════════════════════════════════════════════
@@ -437,7 +443,7 @@ jobs:
           echo "  📋 Commit:  ${{ github.sha }}"
           echo "  🌿 Branch:  ${{ github.ref_name }}"
           echo "  👤 Author:  ${{ github.actor }}"
-          echo "  📦 Image:   ghcr.io/${{ github.repository }}/roadsense-backend:${{ github.sha }}"
+          echo "  📦 Image:   ghcr.io/aarav-git/adas/roadsense-backend:${{ github.sha }}"
           echo ""
           echo "  ── Deployment Targets ──────────────────────────────"
           echo "  🚂 Backend:  Railway (auto-deploys from main)"
