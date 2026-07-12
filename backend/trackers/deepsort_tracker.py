@@ -124,7 +124,7 @@ class DeepSORTTracker:
             if track.hits < DEEPSORT_N_INIT:
                 continue
 
-            tid  = track.track_id
+            tid  = int(track.track_id)
             ltrb = track.to_ltrb()
             x1, y1, x2, y2 = ltrb
             cx = (x1 + x2) / 2
