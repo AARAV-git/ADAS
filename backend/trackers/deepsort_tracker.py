@@ -65,6 +65,10 @@ class DeepSORTTracker:
             lambda: deque(maxlen=TRAJECTORY_LEN)
         )
         self._labels:   Dict[int, str]   = {}
+        self._label_votes: Dict[int, deque] = defaultdict(
+            lambda: deque(maxlen=7)
+        )
+        self._conf_cache: Dict[int, float] = {}
         self._frame_id: int              = 0
         print("  [Tracker] DeepSORT ready")
 
@@ -105,8 +109,10 @@ class DeepSORTTracker:
                     return []
             else:
                 tracks = self.tracker.update_tracks(raw, frame=frame)
+
         # Manually promote tentative tracks (state = 1) to confirmed (state = 2) so they survive skipped frames.
-        # Since we run YOLO inference every 4 frames on CPU, tentative tracks would otherwise age out immediately.
+        # Since we run YOLO inference every 3 frames on CPU, tentative tracks would otherwise age out immediately.
+        # However, we only expose them to the user once they have met the DEEPSORT_N_INIT hits requirement.
         for t in tracks:
             if t.state == 1:
                 t.state = 2
@@ -114,7 +120,8 @@ class DeepSORTTracker:
         result = []
 
         for track in tracks:
-            if not track.is_confirmed():
+            # Filter tracks that do not have enough hits to be considered stable/confirmed
+            if track.hits < DEEPSORT_N_INIT:
                 continue
 
             tid  = track.track_id
@@ -126,8 +133,15 @@ class DeepSORTTracker:
             bh = y2 - y1
 
             if track.det_class:
-                self._labels[tid] = track.det_class
-            label = self._labels.get(tid, "vehicle")
+                self._label_votes[tid].append(track.det_class)
+            
+            # Temporal label smoothing: use majority vote from last 7 frames
+            if self._label_votes[tid]:
+                from collections import Counter
+                label = Counter(self._label_votes[tid]).most_common(1)[0][0]
+                self._labels[tid] = label
+            else:
+                label = self._labels.get(tid, "vehicle")
 
             # Update trajectory
             self._history[tid].append((cx, cy, self._frame_id))
@@ -136,8 +150,8 @@ class DeepSORTTracker:
             # Compute motion
             velocity, speed, direction = self._motion(tid)
 
-            # Find original conf from dets by proximity
-            conf = self._match_conf(dets, cx, cy)
+            # Find original conf from dets by proximity and cache it
+            conf = self._match_conf(dets, cx, cy, tid)
 
             result.append(TrackedObject(
                 track_id   = tid,
@@ -174,16 +188,21 @@ class DeepSORTTracker:
         direction = float(np.degrees(np.arctan2(vy, vx)) % 360)
         return (vx, vy), speed, direction
 
-    def _match_conf(self, dets, cx, cy) -> float:
+    def _match_conf(self, dets, cx, cy, tid: int) -> float:
         """Find closest detection to give its confidence to the track."""
-        best_conf = 0.5
+        best_conf = None
         best_dist = float("inf")
         for d in dets:
             dist = np.sqrt((d.cx - cx)**2 + (d.cy - cy)**2)
             if dist < best_dist:
                 best_dist = dist
                 best_conf = d.conf
-        return best_conf
+
+        # Only update cache if the match is close (within 150px)
+        if best_conf is not None and best_dist < 150.0:
+            self._conf_cache[tid] = best_conf
+
+        return self._conf_cache.get(tid, best_conf if best_conf is not None else 0.5)
 
     def get_trajectory(self, tid: int):
         return list(self._history.get(tid, []))

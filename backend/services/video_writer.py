@@ -19,6 +19,7 @@ class VideoWriter:
       - Auto output path generation
       - Summary JSON export
       - Frame count + duration tracking
+      - Achieved FPS calculation for live camera streams (avoids sped-up playback)
     """
 
     def __init__(
@@ -39,6 +40,9 @@ class VideoWriter:
         self.writer       = None
         self.out_path     = None
         self.frame_count  = 0
+        self.temp_dir     = None
+        self.start_time   = None
+        self.end_time     = None
         self.stats        = {
             "vru_frames":     0,
             "high_risk_frames": 0,
@@ -49,29 +53,28 @@ class VideoWriter:
         os.makedirs(self.output_dir, exist_ok=True)
 
     def open(self) -> str:
-        """Open the video writer. Returns output path."""
+        """Open the frame buffer. Returns output path."""
         filename  = os.path.splitext(os.path.basename(self.input_path))[0]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.out_path = os.path.join(
             self.output_dir, f"{filename}_roadsense_{timestamp}.mp4"
         )
 
-        fourcc      = cv2.VideoWriter_fourcc(*"mp4v")
-        self.writer = cv2.VideoWriter(
-            self.out_path, fourcc, self.fps,
-            (self.frame_width, self.frame_height)
-        )
-
-        if not self.writer.isOpened():
-            raise RuntimeError(f"Could not open VideoWriter at {self.out_path}")
-
-        print(f"  [VideoWriter] Saving → {self.out_path}")
+        # Create a unique temporary directory for frame storage to handle dynamic FPS compilation
+        import tempfile
+        self.temp_dir = tempfile.mkdtemp(prefix="roadsense_frames_")
+        print(f"  [VideoWriter] Buffering frames to temp directory: {self.temp_dir}")
         return self.out_path
 
     def write(self, frame, result: Optional[dict] = None):
         """Write a single annotated frame. Optionally update stats from result."""
-        if self.writer and self.writer.isOpened():
-            self.writer.write(frame)
+        import time
+        if self.start_time is None:
+            self.start_time = time.time()
+
+        if self.temp_dir and os.path.exists(self.temp_dir):
+            frame_path = os.path.join(self.temp_dir, f"frame_{self.frame_count:06d}.jpg")
+            cv2.imwrite(frame_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
             self.frame_count += 1
 
         if result:
@@ -99,15 +102,54 @@ class VideoWriter:
                 self.stats["total_detections"].get(obj.label, 0) + 1
 
     def close(self) -> dict:
-        """Release writer and save summary JSON. Returns summary dict."""
-        if self.writer:
+        """Compile buffered frames into final video at the calculated FPS and clean up."""
+        import time
+        import shutil
+
+        if self.frame_count > 0 and self.temp_dir and os.path.exists(self.temp_dir):
+            if self.start_time is not None:
+                self.end_time = time.time()
+                elapsed = self.end_time - self.start_time
+                # For live camera streams, calculate actual achieved frame rate
+                if "live_camera" in self.input_path and elapsed > 0:
+                    actual_fps = self.frame_count / elapsed
+                    self.fps = min(max(actual_fps, 5.0), 30.0)
+                    print(f"  [VideoWriter] Live camera detected. Adjusting output FPS to achieved processing rate: {self.fps:.1f} FPS")
+
+            # Open real VideoWriter with determined FPS
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            self.writer = cv2.VideoWriter(
+                self.out_path, fourcc, self.fps,
+                (self.frame_width, self.frame_height)
+            )
+
+            if not self.writer.isOpened():
+                shutil.rmtree(self.temp_dir, ignore_errors=True)
+                raise RuntimeError(f"Could not open VideoWriter at {self.out_path}")
+
+            print(f"  [VideoWriter] Compiling video from buffer at {self.fps:.1f} FPS...")
+            for i in range(self.frame_count):
+                frame_path = os.path.join(self.temp_dir, f"frame_{i:06d}.jpg")
+                if os.path.exists(frame_path):
+                    img = cv2.imread(frame_path)
+                    if img is not None:
+                        # Safety check: ensure frame size matches exactly
+                        if img.shape[1] != self.frame_width or img.shape[0] != self.frame_height:
+                            img = cv2.resize(img, (self.frame_width, self.frame_height))
+                        self.writer.write(img)
+
             self.writer.release()
             self.writer = None
+
+            # Clean up temp files
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
+            self.temp_dir = None
+            print(f"  [VideoWriter] Saved output video → {self.out_path}")
 
         summary = self._build_summary()
 
         # Save summary JSON
-        if self.out_path:
+        if self.out_path and self.frame_count > 0:
             json_path = self.out_path.replace(".mp4", "_summary.json")
             with open(json_path, "w") as f:
                 json.dump(summary, f, indent=2)
@@ -148,4 +190,4 @@ class VideoWriter:
 
     @property
     def is_open(self) -> bool:
-        return self.writer is not None and self.writer.isOpened()
+        return self.temp_dir is not None

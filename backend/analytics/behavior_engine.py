@@ -81,6 +81,10 @@ class IndianBehaviorEngine:
             ):
                 continue
 
+            # Suppress false detections on static structures like lighting poles/bridge cables
+            if self._is_static_structure(p):
+                continue
+
             p.label = self._classify_person(p)
             result.append(p)
 
@@ -108,6 +112,27 @@ class IndianBehaviorEngine:
         )
 
     # ── Person classifier ─────────────────────────────────────────────────────
+
+    def _is_static_structure(self, p: RawDetection) -> bool:
+        """Filter out tall/narrow static structures (poles, bridge cables) at night."""
+        w = p.bbox[2] - p.bbox[0]
+        h = p.bbox[3] - p.bbox[1]
+        if w <= 0 or h <= 0:
+            return False
+
+        aspect_ratio = h / w
+        is_upper_half = p.cy < self.fh * 0.55
+
+        # 1. Extremely high aspect ratio (extremely thin and tall) in the background/upper half
+        if aspect_ratio > 4.5 and is_upper_half:
+            return True
+
+        # 2. Narrow vertical lines (e.g., distant poles) in upper half
+        width_ratio = w / self.fw
+        if width_ratio < 0.012 and is_upper_half and aspect_ratio > 3.0:
+            return True
+
+        return False
 
     def _classify_person(self, p: RawDetection) -> str:
         on_road   = p.cy > self.fh * VRU_ROAD_ZONE

@@ -37,12 +37,12 @@ MODELS = {
 # ── Dynamic GPU/CPU Performance Optimizations ─────────────────────────────────
 import torch
 CUDA_AVAILABLE  = torch.cuda.is_available()
-YOLO_IMGSZ      = 640 if CUDA_AVAILABLE else 320   # 320 on CPU: best balance of speed vs detection
+YOLO_IMGSZ      = 640 if CUDA_AVAILABLE else 416   # 416 on CPU: sweet spot for small objects vs speed
 BYPASS_EMBEDDER = not CUDA_AVAILABLE   # use deep features on GPU, skip on CPU
 
 # ── Detection Thresholds ──────────────────────────────────────────────────────
 CONF = {
-    "base":  float(os.getenv("CONF_BASE",  "0.40")),
+    "base":  float(os.getenv("CONF_BASE",  "0.35")),
     "auto":  float(os.getenv("CONF_AUTO",  "0.43")),
     "rider": float(os.getenv("CONF_RIDER", "0.45")),
 }
@@ -60,7 +60,7 @@ COCO_KEEP = {
 FALSE_PED_THRESH     = 0.50
 RIDER_OVERLAP_THRESH = 0.25
 AUTO_VS_VEH_IOU      = 0.30
-NMS_IOU_THRESH       = 0.40
+NMS_IOU_THRESH       = 0.55
 
 # VRU detection (ALL 3 must be true)
 VRU_SPEED_THRESH     = 0.5    # px/frame
@@ -68,8 +68,8 @@ VRU_SMALL_BOX        = 0.006  # fraction of frame area
 VRU_ROAD_ZONE        = 0.65   # bottom Y fraction of frame
 
 # ── Tracking ──────────────────────────────────────────────────────────────────
-DEEPSORT_MAX_AGE     = 60     # frames to keep a track alive without detection
-DEEPSORT_N_INIT      = 1     # confirm track on FIRST detection
+DEEPSORT_MAX_AGE     = 30     # frames to keep a track alive without detection
+DEEPSORT_N_INIT      = 3     # confirm track on THIRD detection to reduce false positives
 TRAJECTORY_LEN       = 30     # frames to keep
 
 # ── Risk Engine ───────────────────────────────────────────────────────────────
