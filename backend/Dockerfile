@@ -1,8 +1,14 @@
 # ── RoadSense AI — Backend Dockerfile ────────────────────────────────────────
 FROM python:3.11-slim
 
-# ── System packages ────────────────────────────────────────────────────────
-ENV DEBIAN_FRONTEND=noninteractive
+# ── System packages & Memory limits ──────────────────────────────────────────
+ENV DEBIAN_FRONTEND=noninteractive \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    PYTHONUNBUFFERED=1 \
+    MALLOC_TRIM_THRESHOLD_=100000
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libglib2.0-0 libgl1 libsm6 libxext6 libxrender-dev \
         ffmpeg \
@@ -11,7 +17,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── Python dependencies ────────────────────────────────────────────────────
 WORKDIR /app
 COPY requirements.txt .
+# Install CPU-only PyTorch FIRST to prevent installing 2.5GB CUDA packages (saves 400MB RAM)
 RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt
 
 # ── App code ───────────────────────────────────────────────────────────────

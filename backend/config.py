@@ -22,21 +22,34 @@ OUTPUTS_DIR = os.getenv("OUTPUTS_DIR", os.path.join(BASE_DIR, "outputs"))
 os.makedirs(VIDEOS_DIR,  exist_ok=True)
 os.makedirs(OUTPUTS_DIR, exist_ok=True)
 
+# Record camera runs to MP4 (default 0 to save RAM/CPU on deployment)
+RECORD_CAMERA = os.getenv("RECORD_CAMERA", "0") == "1"
+
 # ── Database ──────────────────────────────────────────────────────────────────
 # SQLite by default (file in backend/). Override for PostgreSQL:
 #   DATABASE_URL=postgresql+asyncpg://user:pass@host/dbname
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite+aiosqlite:///{os.path.join(BASE_DIR, 'roadsense.db')}")
 
 # ── Model Paths ───────────────────────────────────────────────────────────────
+def _resolve_model(path: str, fallback_filename: str = "yolov8n.pt") -> str:
+    if os.path.exists(path):
+        return path
+    fallback_path = os.path.join(BASE_DIR, fallback_filename)
+    return fallback_path if os.path.exists(fallback_path) else fallback_filename
+
 MODELS = {
-    "base":   os.getenv("MODEL_BASE",  os.path.join(BASE_DIR, "yolov8n.pt")),
-    "auto":   os.getenv("MODEL_AUTO",  os.path.join(BASE_DIR, "runs", "train", "auto_rickshaw_v1", "weights", "best.pt")),
-    "rider":  os.getenv("MODEL_RIDER", os.path.join(BASE_DIR, "runs", "train", "rider_v1", "weights", "best.pt")),
+    "base":   _resolve_model(os.getenv("MODEL_BASE",  os.path.join(BASE_DIR, "yolov8n.pt"))),
+    "auto":   _resolve_model(os.getenv("MODEL_AUTO",  os.path.join(BASE_DIR, "runs", "train", "auto_rickshaw_v1", "weights", "best.pt"))),
+    "rider":  _resolve_model(os.getenv("MODEL_RIDER", os.path.join(BASE_DIR, "runs", "train", "rider_v1", "weights", "best.pt"))),
 }
 
 # ── Dynamic GPU/CPU Performance Optimizations ─────────────────────────────────
 import torch
 CUDA_AVAILABLE  = torch.cuda.is_available()
+if not CUDA_AVAILABLE:
+    # Limit PyTorch CPU thread allocation to prevent high RAM overhead on Render 512MB limit
+    torch.set_num_threads(1)
+
 YOLO_IMGSZ      = 640 if CUDA_AVAILABLE else 416   # 416 on CPU: sweet spot for small objects vs speed
 BYPASS_EMBEDDER = not CUDA_AVAILABLE   # use deep features on GPU, skip on CPU
 

@@ -42,27 +42,58 @@ class RawDetection:
 import torch
 
 class TripleModelDetector:
-    """Loads and runs all 3 YOLOv8 models."""
+    """Loads and runs YOLOv8 models. Reuses model instances if paths are identical to save RAM."""
 
     def __init__(self):
-        print("  [Detector] Loading 3 models...")
+        print("  [Detector] Loading models...")
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"  [Detector] Using device: {self.device}")
-        self.model_base  = YOLO(MODELS["base"]).to(self.device)
-        self.model_auto  = YOLO(MODELS["auto"]).to(self.device)
-        self.model_rider = YOLO(MODELS["rider"]).to(self.device)
+        
+        self.model_base = YOLO(MODELS["base"]).to(self.device)
+
+        # Reuse base model if auto/rider point to the same model file (saves memory)
+        if MODELS["auto"] == MODELS["base"]:
+            self.model_auto = self.model_base
+        else:
+            self.model_auto = YOLO(MODELS["auto"]).to(self.device)
+
+        if MODELS["rider"] == MODELS["base"]:
+            self.model_rider = self.model_base
+        elif MODELS["rider"] == MODELS["auto"]:
+            self.model_rider = self.model_auto
+        else:
+            self.model_rider = YOLO(MODELS["rider"]).to(self.device)
+
         self.rider_names = self.model_rider.names
-        # Thread-pool: run 3 models concurrently on CPU (GIL releases during C++ inference)
-        self._pool = ThreadPoolExecutor(max_workers=3)
-        print("  [Detector] All 3 models ready")
+        
+        # Only use thread pool if models are distinct
+        self._single_pass = (self.model_auto is self.model_base) and (self.model_rider is self.model_base)
+        if not self._single_pass:
+            self._pool = ThreadPoolExecutor(max_workers=3)
+        else:
+            self._pool = None
+        print("  [Detector] Models ready")
 
     def detect(self, frame: np.ndarray) -> dict:
         """
-        Run all 3 models on frame IN PARALLEL using a thread pool.
-        YOLO/PyTorch releases the GIL during C++ inference so threads
-        genuinely overlap, giving ~2-3× speedup on CPU.
+        Run detection models on frame.
+        If all model paths match (e.g. fallback mode), run a single pass to save RAM and CPU.
         """
         h, w = frame.shape[:2]
+
+        if self._single_pass:
+            r_base = self.model_base(
+                frame, imgsz=YOLO_IMGSZ, conf=CONF["base"],
+                device=self.device, verbose=False
+            )[0]
+            base_dets  = self._parse_base(r_base, w, h)
+            auto_dets  = self._parse_auto(r_base, w, h)
+            rider_dets = self._parse_rider(r_base, w, h)
+            return {
+                "base":  base_dets,
+                "auto":  auto_dets,
+                "rider": rider_dets,
+            }
 
         def _run_base():
             return self.model_base(

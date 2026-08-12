@@ -32,6 +32,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import gc
+from config import RECORD_CAMERA
 from services.video_processor import RoadSensePipeline
 from services.video_writer    import VideoWriter
 from utils.drawing            import draw_tracked_object, draw_hud
@@ -621,7 +623,7 @@ async def websocket_camera(websocket: WebSocket):
                         camera_pipeline = RoadSensePipeline(frame_width=W, frame_height=H)
                         print("[Camera] Pipeline initialized")
 
-                if vwriter is None:
+                if RECORD_CAMERA and vwriter is None:
                     vwriter = VideoWriter(
                         input_path="live_camera.mp4",
                         frame_width=W,
@@ -736,6 +738,7 @@ async def websocket_camera(websocket: WebSocket):
             await websocket.close()
         except Exception:
             pass
+        gc.collect()
 
 
 # ── Mount Static Files ────────────────────────────────────────────────────────
