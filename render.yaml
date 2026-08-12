@@ -32,6 +32,5 @@ services:
     envVars:
       - key: PORT
         value: 3000
-    dockerBuildArgs:
       - key: NEXT_PUBLIC_API_URL
         value: https://adas-backend.onrender.com
