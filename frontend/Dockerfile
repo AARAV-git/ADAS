@@ -20,8 +20,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build arg to inject backend URL at build time (can be overridden)
-ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+# Build arg — hardcoded to the Render backend URL (Render cannot pass --build-arg at runtime)
+# If you redeploy to a different URL, update this line.
+ARG NEXT_PUBLIC_API_URL=https://adas-backend.onrender.com
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
 RUN npm run build
@@ -33,6 +34,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+# Expose at runtime too (for server-side rendering path in api.ts)
+ENV NEXT_PUBLIC_API_URL=https://adas-backend.onrender.com
 
 # Copy the standalone output (requires output: 'standalone' in next.config.ts)
 COPY --from=builder /app/.next/standalone ./
