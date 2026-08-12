@@ -443,6 +443,7 @@ export function LiveCameraStream({ onTelemetry }: LiveCameraProps) {
 
       // Dynamic WebSocket URL — auto-resolves to LAN IP/production backend
       const wsUrl = API.wsCamera();
+      console.log("[RoadSense] Connecting camera WS →", wsUrl);
 
       const ws = new WebSocket(wsUrl);
       ws.binaryType = "arraybuffer";
@@ -450,6 +451,7 @@ export function LiveCameraStream({ onTelemetry }: LiveCameraProps) {
 
       ws.onopen = () => {
         setConnected(true);
+        console.log("[RoadSense] Camera WS connected ✓");
         // 120ms interval = 8.3 fps — smooth and responsive on mobile CPU + WiFi
         timerRef.current = setInterval(() => {
           if (ws.readyState !== WebSocket.OPEN) return;
@@ -476,8 +478,9 @@ export function LiveCameraStream({ onTelemetry }: LiveCameraProps) {
       ws.onclose = () => setConnected(false);
       ws.onerror = () => {
         setError(
-          `Cannot connect to backend at port 8000.\n` +
-          `Make sure the server is running and your device is on the same WiFi network.`
+          `Cannot connect to backend WebSocket at:\n${wsUrl}\n\n` +
+          `Make sure the backend is running and reachable.`
+
         );
       };
 
@@ -661,14 +664,19 @@ export function LiveCameraStream({ onTelemetry }: LiveCameraProps) {
 
       {/* Stats strip */}
       {active && (
-        <div className="flex items-center gap-3 mt-3 text-[11px] text-muted-foreground">
-          <span>📡 Sending <strong className="text-foreground">{fps} fps</strong> to backend</span>
-          <span>·</span>
-          <span>640 × 480 · JPEG 60%</span>
-          <span>·</span>
-          <span className={connected ? "text-emerald-400" : "text-yellow-400"}>
-            {connected ? "✓ WS Connected" : "⏳ Connecting"}
-          </span>
+        <div className="flex flex-col gap-1 mt-3 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-3">
+            <span>📡 Sending <strong className="text-foreground">{fps} fps</strong> to backend</span>
+            <span>·</span>
+            <span>640 × 480 · JPEG 60%</span>
+            <span>·</span>
+            <span className={connected ? "text-emerald-400" : "text-yellow-400"}>
+              {connected ? "✓ WS Connected" : "⏳ Connecting"}
+            </span>
+          </div>
+          <div className="text-[10px] text-muted-foreground/60 font-mono truncate">
+            🔗 {API.wsCamera()}
+          </div>
         </div>
       )}
     </motion.div>
