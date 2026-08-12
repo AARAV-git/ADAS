@@ -33,12 +33,20 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import gc
+import ctypes
 from config import RECORD_CAMERA
 from services.video_processor import RoadSensePipeline
 from services.video_writer    import VideoWriter
 from utils.drawing            import draw_tracked_object, draw_hud
 from database.db              import init_db, get_db, AsyncSessionLocal
 from database import crud
+
+def trim_memory():
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
 
 RISK_ORDER_MAP = {
     "vulnerable_road_user": 0,
@@ -586,6 +594,9 @@ async def websocket_camera(websocket: WebSocket):
             try:
                 while True:
                     raw_bytes = await websocket.receive_bytes()
+                    # If processing loop is still busy with previous frame, skip decoding new bytes to save memory
+                    if latest_frame is not None:
+                        continue
                     np_arr = np.frombuffer(raw_bytes, dtype=np.uint8)
                     frame  = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                     if frame is not None:
@@ -634,6 +645,8 @@ async def websocket_camera(websocket: WebSocket):
                     vwriter.open()
 
                 frame_idx += 1
+                if frame_idx % 30 == 0:
+                    trim_memory()
 
                 # Skip detection on every other frame (1-in-2) for camera.
                 # Less aggressive than video (1-in-3) so Kalman drift is smaller,
@@ -738,7 +751,7 @@ async def websocket_camera(websocket: WebSocket):
             await websocket.close()
         except Exception:
             pass
-        gc.collect()
+        trim_memory()
 
 
 # ── Mount Static Files ────────────────────────────────────────────────────────

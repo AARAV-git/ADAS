@@ -50,7 +50,7 @@ if not CUDA_AVAILABLE:
     # Limit PyTorch CPU thread allocation to prevent high RAM overhead on Render 512MB limit
     torch.set_num_threads(1)
 
-YOLO_IMGSZ      = 640 if CUDA_AVAILABLE else 416   # 416 on CPU: sweet spot for small objects vs speed
+YOLO_IMGSZ      = 640 if CUDA_AVAILABLE else 320   # 320 on CPU: saves RAM and speeds up inference on Render
 BYPASS_EMBEDDER = not CUDA_AVAILABLE   # use deep features on GPU, skip on CPU
 
 # ── Detection Thresholds ──────────────────────────────────────────────────────
