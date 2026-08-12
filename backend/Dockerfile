@@ -20,7 +20,7 @@ COPY requirements.txt .
 # Install CPU-only PyTorch FIRST to prevent installing 2.5GB CUDA packages (saves 400MB RAM)
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 # ── App code ───────────────────────────────────────────────────────────────
 COPY . /app/

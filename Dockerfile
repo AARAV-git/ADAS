@@ -4,8 +4,14 @@
 
 FROM python:3.11-slim
 
-# ── System packages ────────────────────────────────────────────────────────
-ENV DEBIAN_FRONTEND=noninteractive
+# ── System packages & Memory limits ──────────────────────────────────────────
+ENV DEBIAN_FRONTEND=noninteractive \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    PYTHONUNBUFFERED=1 \
+    MALLOC_TRIM_THRESHOLD_=100000
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libglib2.0-0 libgl1 libsm6 libxext6 libxrender-dev \
         ffmpeg \
@@ -15,8 +21,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── Python dependencies ────────────────────────────────────────────────────
 WORKDIR /app
 COPY requirements.txt .
+# Install CPU-only PyTorch FIRST to prevent installing 3.5GB CUDA packages (prevents 'no space left on device')
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 # ── App code ───────────────────────────────────────────────────────────────
 COPY backend/ /app/

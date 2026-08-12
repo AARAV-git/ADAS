@@ -357,6 +357,11 @@ jobs:
       - name: Set Lowercase Repo Name
         run: echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -394,6 +399,11 @@ jobs:
 
       - name: Set Lowercase Repo Name
         run: echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
