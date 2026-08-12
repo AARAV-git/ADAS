@@ -69,7 +69,7 @@ VRU_ROAD_ZONE        = 0.65   # bottom Y fraction of frame
 
 # ── Tracking ──────────────────────────────────────────────────────────────────
 DEEPSORT_MAX_AGE     = 30     # frames to keep a track alive without detection
-DEEPSORT_N_INIT      = 3     # confirm track on THIRD detection to reduce false positives
+DEEPSORT_N_INIT      = 2     # confirm track on 2nd detection — works with 1-in-3 frame skip
 TRAJECTORY_LEN       = 30     # frames to keep
 
 # ── Risk Engine ───────────────────────────────────────────────────────────────

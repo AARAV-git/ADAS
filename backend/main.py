@@ -633,8 +633,10 @@ async def websocket_camera(websocket: WebSocket):
 
                 frame_idx += 1
 
-                # Skip detection on 2 out of 3 frames to boost FPS and reduce CPU load
-                skip_detection = (frame_idx > 1) and (frame_idx % 3 != 1)
+                # Skip detection on every other frame (1-in-2) for camera.
+                # Less aggressive than video (1-in-3) so Kalman drift is smaller,
+                # making it easier for DeepSORT to re-associate tracks each detection frame.
+                skip_detection = (frame_idx > 1) and (frame_idx % 2 != 1)
 
                 # Process frame on background thread
                 result = await asyncio.to_thread(camera_pipeline.process_frame, frame, skip_detection)
