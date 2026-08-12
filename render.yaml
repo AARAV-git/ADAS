@@ -1,0 +1,37 @@
+services:
+  # ── Backend: FastAPI Server + YOLOv8 ────────────────────────────────────────
+  - type: web
+    name: adas-backend
+    env: docker
+    dockerfilePath: Dockerfile
+    dockerContext: .
+    plan: starter  # Paid plan to support persistent disk for SQLite DB and video uploads
+    envVars:
+      - key: VIDEOS_DIR
+        value: /data/videos
+      - key: OUTPUTS_DIR
+        value: /data/outputs
+      - key: DATABASE_URL
+        value: sqlite+aiosqlite:////data/roadsense.db
+      - key: PORT
+        value: 8000
+      - key: GROQ_API_KEY
+        sync: false  # You will enter this manually in the Render dashboard
+    disk:
+      name: adas-data
+      mountPath: /data
+      sizeGB: 10
+
+  # ── Frontend: Next.js Standalone ─────────────────────────────────────────────
+  - type: web
+    name: adas-frontend
+    env: docker
+    dockerfilePath: frontend/Dockerfile
+    dockerContext: frontend
+    plan: starter
+    envVars:
+      - key: PORT
+        value: 3000
+    dockerBuildArgs:
+      - key: NEXT_PUBLIC_API_URL
+        value: https://adas-backend.onrender.com
