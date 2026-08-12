@@ -1,229 +1,155 @@
 <div align="center">
 
 # 🚦 RoadSense AI
-### *The AI Co-Pilot Built for the Beautiful Chaos of Indian Roads*
+### *The AI Driver Assistance & Traffic Intelligence Platform Built for Unstructured Roads*
 
-**Real-time. Explainable. Unapologetically Indian traffic-aware.**
+**Real-Time Detection · DeepSORT Tracking · Traffic Chaos Dial™ · Live Camera Streaming**
 
-![Status](https://img.shields.io/badge/status-active--development-brightgreen)
-![Python](https://img.shields.io/badge/python-3.9%2B-blue)
-![YOLOv8](https://img.shields.io/badge/detection-YOLOv8-orange)
-![DeepSORT](https://img.shields.io/badge/tracking-DeepSORT-purple)
-![FastAPI](https://img.shields.io/badge/backend-FastAPI-teal)
-![Docker](https://img.shields.io/badge/deploy-Docker%20Ready-2496ED)
-![License](https://img.shields.io/badge/license-MIT-lightgrey)
+[![Live Demo](https://img.shields.io/badge/🌐_Live_Demo-adas--frontend.onrender.com-00C7B7?style=for-the-badge&logo=render)](https://adas-frontend.onrender.com/)
+[![Status](https://img.shields.io/badge/Status-Active%20Deployment-brightgreen?style=for-the-badge)](https://adas-frontend.onrender.com/)
+[![License](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
 
-*Most ADAS systems were trained on empty German autobahns.*
-*RoadSense AI was trained for auto-rickshaws cutting lanes at 40kph.*
+<br/>
+
+> 🌐 **Live Production App:** [https://adas-frontend.onrender.com/](https://adas-frontend.onrender.com/)
+
+*Most ADAS systems were trained on orderly, lane-marked highways.*  
+*RoadSense AI was engineered for dense urban intersections, auto-rickshaws, fast-moving two-wheelers, and unpredictable pedestrian traffic.*
 
 </div>
 
 ---
 
-## 🎬 The Problem, In One Line
+## 🚀 Live Demo & Deployment
 
-> Western ADAS assumes lane discipline. **Indian roads laugh at lane discipline.**
-
-RoadSense AI doesn't fight the chaos — it *understands* it. It watches the road the way an experienced Indian driver does: constantly recalculating risk from a swirl of bikes, autos, buses, pedestrians, and the occasional cow-shaped surprise.
-
----
-
-## 🗺️ Table of Contents
-
-| | | |
+| Component | Hosted URL | Infrastructure |
 |---|---|---|
-| [⚡ Key Features](#-key-features) | [🧠 How It Thinks](#-how-it-thinks) | [🛠️ Tech Stack](#️-tech-stack) |
-| [📂 Project Structure](#-project-structure) | [🚀 Quick Start](#-quick-start-local-development) | [🐳 Docker Deployment](#-docker-deployment) |
-| [📊 Session Analytics](#-database--historical-session-analytics) | [🎯 Roadmap](#-roadmap) | |
+| 📱 **Frontend App** | [https://adas-frontend.onrender.com/](https://adas-frontend.onrender.com/) | Next.js Standalone Container (Render) |
+| ⚡ **Backend API** | `https://adas-backend-u3k8.onrender.com` | FastAPI + CPU PyTorch + YOLOv8 |
 
 ---
 
 ## ⚡ Key Features
 
 <table>
-<tr><td width="70">🎯</td><td><b>Real-Time Object Detection (YOLOv8)</b><br/>Spots cars, motorcycles, auto-rickshaws, buses, trucks, and pedestrians — in scenes that would make a Western dataset cry.</td></tr>
-<tr><td>🕸️</td><td><b>Multi-Object Tracking (DeepSORT)</b><br/>Follows every road user frame-to-frame, building trajectory history and estimating velocity, speed, and heading — so the system remembers, not just sees.</td></tr>
-<tr><td>🔮</td><td><b>Behavioral Intent Prediction</b><br/>Heuristic rules flag aggressive lane-cutting, sudden overtakes, blind-spot intrusions, and pedestrian crossings <i>before</i> they become incidents.</td></tr>
-<tr><td>🌡️</td><td><b>Traffic Chaos Score™</b><br/>A live <code>0–100</code> dial measuring density, speed variance, and lane violations — the system's "how wild is this intersection right now" gauge.</td></tr>
-<tr><td>💬</td><td><b>Explainable AI Warnings</b><br/>No cryptic beeps. Just plain language: <i>"Motorcycle approaching rapidly from left blind spot."</i> Drivers trust what they understand.</td></tr>
+<tr><td width="70">🎯</td><td><b>Tri-Model YOLOv8 Object Detection</b><br/>Recognizes cars, motorcycles, auto-rickshaws, buses, trucks, and pedestrians with custom Indian vehicle class mapping and low-latency CPU optimization.</td></tr>
+<tr><td>🕸️</td><td><b>DeepSORT Multi-Object Tracking</b><br/>Assigns persistent IDs frame-to-frame, estimating real-time trajectory history, speed vectors, and heading direction across occlusion gaps.</td></tr>
+<tr><td>📷</td><td><b>Low-Latency Live Camera Streaming</b><br/>Stream mobile phone rear cameras or webcams directly over WebSockets (`/ws/camera`) with real-time detection overlay rendering.</td></tr>
+<tr><td>🌡️</td><td><b>Traffic Chaos Score™ (0–100)</b><br/>Real-time dynamic index measuring road user density, speed variance, proximity risks, and spatial entropy.</td></tr>
+<tr><td>💬</td><td><b>Explainable ADAS Alerts</b><br/>Generates plain-language driver alerts (e.g., <i>"Auto-rickshaw cutting into blind spot from left"</i>) backed by Groq LLaMA3 / rule-based fallback.</td></tr>
+<tr><td>📊</td><td><b>Session History & Analytics</b><br/>Persists full frame-by-frame telemetry, alert logs, and chaos timelines in SQLite/AsyncSession for historical review and export.</td></tr>
 </table>
 
 ---
 
-## 🧠 How It Thinks
+## 🧠 System Architecture
 
 ```mermaid
 flowchart LR
-    A[📹 Video Feed] --> B[🎯 YOLOv8 Detection]
-    B --> C[🕸️ DeepSORT Tracking]
-    C --> D[🌡️ Chaos Score Engine]
-    C --> E[🔮 Behavior Engine]
-    D --> F[⚠️ Risk Engine]
-    E --> F
-    F --> G[💬 LLM Explainability Layer]
-    G --> H[🖥️ HUD Overlay + Alerts]
-    F --> I[(🗄️ Session Database)]
-```
+    subgraph Frontend ["Client Layer (Next.js)"]
+        A[📹 Live Camera / Video Stream] -->|WebSocket / JPEG| B[🖥️ Dashboard HUD]
+    end
 
-Every frame runs this full loop — detect, track, score, explain — in near real time.
+    subgraph Backend ["Server Layer (FastAPI)"]
+        B -->|/ws/camera| C[🎯 Tri-Model YOLOv8]
+        C --> D[🕸️ DeepSORT Tracker]
+        D --> E[🔮 Indian Behavior Engine]
+        E --> F[🌡️ Chaos Score Engine]
+        F --> G[💬 Explainability Engine]
+        G -->|Telemetry JSON| B
+        F --> H[(🗄️ SQLite / AsyncPG Session DB)]
+    end
+```
 
 ---
 
 ## 🛠️ Tech Stack
 
-| Layer | Weapon of Choice |
+| Layer | Technology |
 |---|---|
-| 🎯 Object Detection | **YOLOv8** |
-| 🕸️ Object Tracking | **DeepSORT** |
-| ⚙️ Backend API | **FastAPI** & **Uvicorn** |
-| 🖼️ Image Processing | **OpenCV** & **NumPy** |
-| 🗣️ AI Explanations | **Groq LLaMA3 API** (with rule-based fallback) |
+| 🖥️ **Frontend** | **Next.js 16** (App Router, Turbopack), **TypeScript**, **Tailwind CSS**, **Framer Motion**, **Lucide Icons** |
+| ⚡ **Backend** | **FastAPI**, **Uvicorn**, **Python 3.11** |
+| 🎯 **Computer Vision** | **YOLOv8** (PyTorch CPU-optimized), **OpenCV**, **NumPy** |
+| 🕸️ **Tracking** | **DeepSORT Realtime** (Kalman Filter + Hungarian Algorithm) |
+| 🗄️ **Database** | **SQLAlchemy 2.0** + **aiosqlite** / **PostgreSQL** |
+| ☁️ **Deployment & CI/CD** | **Render**, **Docker**, **GitHub Actions** |
 
 ---
 
 ## 📂 Project Structure
 
-<details>
-<summary><b>Click to expand the full directory map 🗂️</b></summary>
-
 ```
 ADAS Adoption/
+├── frontend/                     # Next.js 16 Standalone Dashboard App
+│   ├── src/
+│   │   ├── app/                  # App Router pages & API routes
+│   │   ├── components/dashboard/ # VideoStream, ChaosGauge, Sessions, Telemetry HUD
+│   │   └── lib/                  # API client, WebSocket URL resolvers, Types
+│   └── Dockerfile                # Standalone Next.js production build
 │
-├── backend/
-│   ├── main.py                  # FastAPI Application Entrypoint
-│   ├── config.py                # Configuration & Thresholds
-│   │
+├── backend/                      # FastAPI Python ADAS Engine
+│   ├── main.py                   # FastAPI WebSocket & REST endpoints
+│   ├── config.py                 # Central configuration, model paths & memory controls
 │   ├── detectors/
-│   │   └── yolo_detector.py     # YOLOv8 Detection Wrapper
-│   │
+│   │   └── yolo_detector.py      # Tri-Model YOLOv8 detector with single-pass CPU fallback
 │   ├── trackers/
-│   │   └── deepsort_tracker.py  # DeepSORT Tracking Wrapper
-│   │
+│   │   └── deepsort_tracker.py   # DeepSORT tracker with confidence caching & label smoothing
 │   ├── analytics/
-│   │   ├── chaos_score.py       # Traffic Chaos Estimation Engine
-│   │   ├── behavior_engine.py   # Lateral/Speed Behavior Engine
-│   │   └── risk_engine.py       # Multi-Factor Proximity/Lane Risk Engine
-│   │
-│   ├── explainability/
-│   │   └── llm_alerts.py        # Natural Language Warn & Action Generator
-│   │
+│   │   ├── behavior_engine.py    # Behavior classification & static structure filtering
+│   │   ├── chaos_score.py        # Chaos Score 0-100 algorithm
+│   │   └── risk_engine.py        # Proximity & speed risk assessor
 │   ├── services/
-│   │   ├── video_processor.py   # Core processing pipeline orchestrator
-│   │   └── video_writer.py      # Video export utility
-│   │
-│   └── utils/
-│       ├── drawing.py           # OpenCV Annotation & HUD Overlay drawing
-│       └── geometry.py          # Math & Vector utilities
+│   │   ├── video_processor.py    # Pipeline orchestrator
+│   │   └── video_writer.py       # Frame buffering & MP4 exporter
+│   └── Dockerfile                # CPU-optimized PyTorch container
 │
-├── vedio/                       # Input video folder (ignored in git)
-└── requirements.txt             # Python Dependencies
+├── render.yaml                   # Render Blueprint multi-service deployment spec
+├── docker-compose.yml            # Local Docker stack orchestration
+└── requirements.txt              # Core Python dependencies
 ```
-
-</details>
 
 ---
 
 ## 🚀 Quick Start (Local Development)
 
-### 1️⃣ Install Dependencies
+### 1️⃣ Clone & Setup Backend
+
 ```bash
+# Activate virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: .\venv\Scripts\activate
+
+# Install CPU-optimized dependencies
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
+
+# Start backend server
 cd backend
-python install.py
+python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 2️⃣ Configure Environment Variables
-Create a `.env` file in the root directory (and/or in `backend/`):
-```env
-GROQ_API_KEY=your_groq_api_key_here
-DATABASE_URL=sqlite+aiosqlite:///./roadsense.db
-```
-
-### 3️⃣ Fire Up the Backend
-
-<table>
-<tr><th>🪟 Windows</th><th>🐧 Linux / 🍎 macOS</th></tr>
-<tr>
-<td>
+### 2️⃣ Setup Frontend
 
 ```bash
-backend\start_server.bat
+cd frontend
+npm install
+npm run dev
 ```
-or
-```bash
-cd backend
-python -m uvicorn main:app --host 0.0.0.0 --port 8000
-```
-</td>
-<td>
 
-```bash
-cd backend
-chmod +x start_server.sh
-./start_server.sh
-```
-</td>
-</tr>
-</table>
-
-Then open **`http://localhost:8000`** and watch the chaos score come alive. 🌡️
+Visit **`http://localhost:3000`** in your browser.
 
 ---
 
 ## 🐳 Docker Deployment
 
-Fully containerized. Optional NVIDIA GPU pass-through for when you want the real speed.
+Run both Frontend and Backend together with single-command Docker Compose:
 
-### Prerequisites
-- ✅ [Docker](https://www.docker.com/) + [Docker Compose](https://docs.docker.com/compose/)
-- ⚡ *(Optional, for GPU)* [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-
-### Launch the Stack
 ```bash
 docker compose up --build -d
 ```
 
-This one command:
-- 🏗️ Compiles the multi-stage, production-grade image
-- 🚀 Starts FastAPI + Uvicorn
-- 💾 Mounts `./data/videos` and `./data/db` for persistent uploads & sessions
-
-### GPU vs CPU
-
-| Mode | What Happens |
-|---|---|
-| 🎮 **GPU (default)** | Allocates 1 NVIDIA GPU via `deploy:` block in `docker-compose.yml` |
-| 💻 **CPU (fallback)** | Remove/comment the `deploy:` block → auto-downscales to `320px` for speed |
-
----
-
-## 📊 Database & Historical Session Analytics
-
-Every run leaves a trail. RoadSense AI persists full session telemetry to SQLite/PostgreSQL — nothing vanishes when the video ends.
-
-**What gets tracked per session:**
-- 🆔 A unique `VideoSession` record
-- 📈 Frame-by-frame chaos scores & vehicle densities
-- 🔔 Full warning/alert telemetry
-
-### 🕹️ Using the Session History Panel
-
-1. Open the dashboard → `http://localhost:8000`
-2. Click **📊 History** (top-right toolbar)
-3. Browse the slide-over panel → Total Sessions, Average Chaos, Total Alerts
-4. Click into any session for:
-   - 📋 Detailed metadata summary
-   - 📉 Interactive canvas-rendered **Traffic Chaos Timeline**
-   - ⚠️ Complete list of every triggered ADAS alert
-5. 🗑️ Delete any session with one click
-
----
-
-## 🎯 Roadmap
-
-- [ ] Live camera stream ingestion (not just uploaded video)
-- [ ] Mobile HUD companion app
-- [ ] Expanded VRU (vulnerable road user) classification
-- [ ] Multi-camera intersection fusion
+- **Frontend:** `http://localhost:3000`
+- **Backend API:** `http://localhost:8000`
 
 ---
 
@@ -231,6 +157,6 @@ Every run leaves a trail. RoadSense AI persists full session telemetry to SQLite
 
 ### 🛣️ Built for the roads that break every rulebook.
 
-**RoadSense AI doesn't just detect traffic — it understands it.**
+**[Launch Live Demo](https://adas-frontend.onrender.com/)**
 
 </div>
